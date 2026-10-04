@@ -451,6 +451,14 @@ const ZH = {
   "The module handles remote provisioning while these stay on. Only if a device explicitly fails keybox attestation — a rare case — should you toggle them all off to force keystore2 onto the keybox.":
     "这些开关保持开启时，远程下发由模块处理。只有当某台设备明确无法通过密钥盒认证（罕见情况）时，才需要把它们全部关掉，以迫使 keystore2 走密钥盒。",
 
+  // ---- USB debugging -------------------------------------------------------
+  "USB debugging": "USB 调试",
+  "Pin USB debugging": "固定 USB 调试状态",
+  "Reading…": "读取中…",
+  "Could not update USB debugging.": "无法更新 USB 调试状态。",
+  "Written to a system property and re-applied at every boot, so turning USB debugging off keeps it off after a reboot — and leaving it on keeps it on.":
+    "会写入系统属性，并在每次开机时重新应用：关闭后重启依旧是关闭状态，开启后同样保持开启。",
+
   // ---- identity fields (schema labels) -------------------------------------
   Apps: "应用",
   "Auto-include new apps": "自动包含新应用",

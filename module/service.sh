@@ -21,6 +21,46 @@ for f in "$MODDIR"/*/teesim-uds; do
   fi
 done
 
+# --- USB-debugging pin -------------------------------------------------------
+# The WebUI's USB-debugging switch records the user's choice in persist.teesim.usb_debug
+# (1 = on, 0 = off). A persist.* property survives a reboot by itself, but the framework
+# re-derives the live USB configuration while it boots, so the recorded choice is re-asserted
+# here: the settings write is the one Android applies through its normal path, and the
+# function-list write below keeps persist.sys.usb.config agreeing with the record even on a
+# device that refuses the settings write. Silent when the pin is unset — a device that has
+# never used the switch keeps whatever it had.
+pin=$(getprop persist.teesim.usb_debug)
+case "$pin" in
+  0 | 1)
+    if [ "$pin" = "1" ]; then
+      settings put global adb_enabled 1 2>/dev/null
+    else
+      settings put global adb_enabled 0 2>/dev/null
+    fi
+    cfg=$(getprop persist.sys.usb.config)
+    [ -n "$cfg" ] || cfg=mtp
+    rest=""
+    OLDIFS=$IFS
+    IFS=,
+    for f in $cfg; do
+      if [ "$f" != "adb" ] && [ -n "$f" ]; then
+        if [ -z "$rest" ]; then rest=$f; else rest="$rest,$f"; fi
+      fi
+    done
+    IFS=$OLDIFS
+    [ -n "$rest" ] || rest=mtp
+    if [ "$pin" = "1" ]; then
+      new="$rest,adb"
+    else
+      new=$rest
+    fi
+    if [ "$new" != "$cfg" ]; then
+      resetprop persist.sys.usb.config "$new" 2>/dev/null ||
+        setprop persist.sys.usb.config "$new" 2>/dev/null
+    fi
+    ;;
+esac
+
 while true; do
   "$MODDIR/daemon" "$MODDIR"
   sleep 2

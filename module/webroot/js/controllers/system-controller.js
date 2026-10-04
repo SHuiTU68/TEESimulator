@@ -1,8 +1,8 @@
-// Owns the System screen: the read-only daemon/harvest status poll AND the canary
-// updater. Nothing here reaches the shell except through the daemon seam
-// (data/status.js and data/keyadmin.js). It degrades gracefully — an unreachable
-// daemon yields a well-formed "unreachable" health snapshot and simply no update
-// badge, never a thrown error.
+// Owns the System screen: the read-only daemon/harvest status poll, the USB-debugging pin, and the
+// canary updater. Nothing here reaches the shell except through the daemon seam (data/status.js and
+// data/keyadmin.js) or the pin's own adapter (data/usb-io.js). It degrades gracefully — an
+// unreachable daemon yields a well-formed "unreachable" health snapshot and simply no update
+// badge, and an unreadable property yields a card that says so, never a thrown error.
 //
 // create(mount, { onHealth, onBadge })
 //   onHealth(status)  report the latest health snapshot up to the top-bar pill
@@ -14,6 +14,7 @@
 import { getStatus } from "../data/status.js";
 import { keyAdmin } from "../data/keyadmin.js";
 import * as overridesIo from "../data/overrides-io.js";
+import { readUsbDebug, setUsbDebug } from "../data/usb-io.js";
 import { renderSystem, refreshHealth as patchHealthCards } from "../ui/system-view.js";
 import { toast, confirmDialog } from "../ui/dom.js";
 
@@ -34,6 +35,7 @@ export function create(mount, opts = {}) {
   let installing = false;
   let installError = null;
   let notesOpen = false;
+  let usb = null;         // the USB-debug pin: { on, pinned, pin, config, … }, or null when unreadable
 
   let timer = null;
   let inFlight = false;
@@ -45,8 +47,15 @@ export function create(mount, opts = {}) {
   const canarySignature = () => JSON.stringify({ probed, update });
 
   function render() {
-    renderSystem(mount, { status, update, probed, variant, installing, installError, notesOpen }, actions);
+    renderSystem(mount, { status, update, probed, variant, installing, installError, notesOpen, usb }, actions);
     canarySig = canarySignature();
+  }
+
+  // The USB-debug pin's state is a function of two system properties, so it is read once when the
+  // screen is shown and after every flip — never on the health poll (it cannot change by itself).
+  async function refreshUsb() {
+    usb = await readUsbDebug();
+    render();
   }
 
   // Health snapshot: never throws (getStatus returns an "unreachable" object), so
@@ -103,6 +112,16 @@ export function create(mount, opts = {}) {
     // Harvest override edits (System screen "Overrides" group). Both write overrides.json and refresh.
     onSaveOverride(field, value) { writeOverride(field, value); },
     onResetOverride(field) { writeOverride(field, ""); },
+
+    // Pin USB debugging on or off. The switch is its own feedback, so there is no toast on success;
+    // on failure the re-read below snaps it back to the value the device actually took, and the
+    // toast says why. This is the one place where "nothing happened" would be invisible otherwise.
+    async onToggleUsbDebug(on) {
+      const res = await setUsbDebug(on);
+      if (res && res.ok === false) toast("Could not update USB debugging.");
+      usb = await readUsbDebug();
+      render();
+    },
 
     onSelectVariant(v) {
       if (v === variant) return;
@@ -165,6 +184,7 @@ export function create(mount, opts = {}) {
       startPolling();
       refreshHealth();
       probeCanary();
+      refreshUsb();        // the pin's two properties, read once per visit
     },
   };
 }

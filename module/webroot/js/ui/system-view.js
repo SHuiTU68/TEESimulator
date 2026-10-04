@@ -1,8 +1,9 @@
-// The System screen: daemon health, harvest summary, and the canary updater — the
-// three "is the system healthy and current?" concerns on one read-mostly screen.
+// The System screen: daemon health, harvest summary, the USB-debugging pin, and the
+// canary updater — the device-level concerns on one read-mostly screen.
 // Pure presentation: it renders from the state the controller hands it and emits
 // every intent through `actions`. It never imports data/* or bridge/*; the update
-// probe/install all happen in the controller through the daemon seam.
+// probe/install and the USB pin's reads and writes all happen in the controller
+// through the daemon seam.
 //
 // renderSystem(mount, state, actions)
 //   state = {
@@ -13,8 +14,9 @@
 //     installing,   // true while a flash is in flight (Install disabled + progress)
 //     installError, // string | null — surfaced as a .banner.error
 //     notesOpen,    // "What's new" disclosure state
+//     usb,          // { on, pinned, pin, config, prop, configProp } | null (null = not readable)
 //   }
-//   actions = { onInstall(), onSelectVariant(v), onToggleNotes() }
+//   actions = { onInstall(), onSelectVariant(v), onToggleNotes(), onToggleUsbDebug(on) }
 
 import { el, clear, disclosure } from "./dom.js";
 import { renderMarkdown } from "./markdown.js";
@@ -22,12 +24,14 @@ import { renderMarkdown } from "./markdown.js";
 export function renderSystem(mount, state, actions) {
   clear(mount);
   const { status = null, update = null, probed = false,
-          variant = "release", installing = false, installError = null, notesOpen = false } = state;
+          variant = "release", installing = false, installError = null, notesOpen = false,
+          usb = null } = state;
 
   mount.appendChild(el("div", { class: "panel-head" }, [el("h1", { class: "panel-title", text: "System" })]));
 
   mount.appendChild(tag(healthCard(status), "health"));
   mount.appendChild(tag(harvestCard(status, actions), "harvest"));
+  mount.appendChild(tag(usbCard(usb, actions), "usb"));
   mount.appendChild(tag(updateCard({ update, probed, variant, installing, installError, notesOpen }, actions), "update"));
 }
 
@@ -293,6 +297,43 @@ function fmtTime(ms) {
   const n = Number(ms);
   if (!Number.isFinite(n) || n <= 0) return "—";
   try { return new Date(n).toLocaleString(); } catch { return String(ms); }
+}
+
+// --- USB debugging -------------------------------------------------------
+// A switch the module owns at the DEVICE level (not a per-profile setting): it pins Android's USB
+// debugging so the choice made here is re-applied on every boot by module/service.sh, which is what
+// makes "off" stay off across a reboot. The property lines are shown so the state on the device can
+// be read without a shell — they are exactly the values the daemon and the boot script see. When
+// the read itself failed (no root shell), say so rather than offer a switch that would do nothing.
+function usbCard(usb, actions = {}) {
+  const card = el("div", { class: "card" }, [el("h2", { text: "USB debugging" })]);
+  if (!usb) {
+    card.appendChild(el("p", { class: "muted", text: "Reading…" }));
+    return card;
+  }
+
+  const id = "usb-debug";
+  const input = el("input", {
+    id, class: "switch-input", type: "checkbox", checked: usb.on,
+    role: "switch", "aria-checked": usb.on ? "true" : "false",
+    onchange: (e) => actions.onToggleUsbDebug && actions.onToggleUsbDebug(e.target.checked),
+  });
+  const sw = el("span", { class: "switch" + (usb.on ? " on" : "") }, [
+    input,
+    el("span", { class: "switch-track", "aria-hidden": "true" }, [el("span", { class: "switch-thumb" })]),
+  ]);
+  card.appendChild(el("div", { class: "field toggle-field" }, [
+    el("div", { class: "toggle-row" }, [
+      el("label", { class: "toggle-main", for: id }, [
+        el("span", { class: "field-label", text: "Pin USB debugging" }),
+        el("span", { class: "field-help", text: "Written to a system property and re-applied at every boot, so turning USB debugging off keeps it off after a reboot — and leaving it on keeps it on." }),
+        el("span", { class: "field-help mono", text: usb.prop + " = " + (usb.pin || "unset") }),
+        usb.config ? el("span", { class: "field-help mono", text: usb.configProp + " = " + usb.config }) : null,
+      ]),
+      sw,
+    ]),
+  ]));
+  return card;
 }
 
 // --- canary updater ------------------------------------------------------

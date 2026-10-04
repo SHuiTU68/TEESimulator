@@ -12,6 +12,7 @@ import {
   splitEntry, entryToken,
 } from "../js/domain/schema.js";
 import { validateConfig, validateProfile } from "../js/domain/validate.js";
+import { ADB, DEFAULT_FUNCTIONS, hasAdb, withAdb, usbDebugState } from "../js/domain/usb.js";
 
 // A minimal profile that should pass: defaults from emptyProfile() + one app.
 function validProfile(apps = ["com.example.app"]) {
@@ -232,3 +233,77 @@ for (const [re, good, bad] of cases) {
     for (const b of bad) assert.equal(re.test(b), false, `expected ${re} to reject ${JSON.stringify(b)}`);
   });
 }
+
+// --- USB-debugging pin ----------------------------------------------------
+// The rules behind the System screen's switch and module/service.sh's boot re-assertion: the
+// recorded choice (persist.teesim.usb_debug) and the device's USB function list are kept in step.
+test("hasAdb reads a comma-separated function list", () => {
+  assert.equal(hasAdb("mtp,adb"), true);
+  assert.equal(hasAdb("adb"), true);
+  assert.equal(hasAdb("mtp"), false);
+  assert.equal(hasAdb(""), false);
+  assert.equal(hasAdb(null), false);
+  assert.equal(hasAdb(undefined), false);
+  // Whitespace and empty elements around the separator are not a second function name.
+  assert.equal(hasAdb("mtp, adb"), true);
+  assert.equal(hasAdb(",mtp,,adb,"), true);
+  // A function that merely CONTAINS "adb" is not the adb function.
+  assert.equal(hasAdb("adbfoo"), false);
+});
+
+test("withAdb adds and removes adb while preserving every other function", () => {
+  assert.equal(withAdb("mtp", true), "mtp,adb");
+  assert.equal(withAdb("mtp,adb", false), "mtp");
+  assert.equal(withAdb("ptp,rndis", true), "ptp,rndis,adb");
+  assert.equal(withAdb("ptp,rndis", false), "ptp,rndis");
+});
+
+test("withAdb is idempotent and never duplicates adb", () => {
+  assert.equal(withAdb("mtp,adb", true), "mtp,adb");
+  assert.equal(withAdb("mtp", false), "mtp");
+  assert.equal(withAdb("mtp,adb,adb", true), "mtp,adb");
+  assert.equal(withAdb("mtp,adb,adb", false), "mtp");
+});
+
+test("withAdb never yields a bare debugging configuration", () => {
+  // Turning debugging off on a device whose only function is adb leaves it with MTP rather than
+  // with an empty function list, and turning it on from nothing yields MTP + adb.
+  assert.equal(withAdb("adb", false), DEFAULT_FUNCTIONS);
+  assert.equal(withAdb("", false), DEFAULT_FUNCTIONS);
+  assert.equal(withAdb("", true), DEFAULT_FUNCTIONS + "," + ADB);
+  assert.equal(hasAdb(withAdb("", false)), false);
+});
+
+test("withAdb round-trips a pin off and on again", () => {
+  for (const start of ["mtp", "mtp,adb", "ptp", "rndis,mtp,adb"]) {
+    const off = withAdb(start, false);
+    assert.equal(hasAdb(off), false, start);
+    assert.equal(hasAdb(withAdb(off, true)), true, start);
+    assert.equal(hasAdb(withAdb(withAdb(off, true), false)), false, start);
+  }
+});
+
+test("usbDebugState lets the record win over the function list", () => {
+  // Pinned on, even though the live list disagrees: the record is what the user chose.
+  assert.deepEqual(usbDebugState("1", "mtp"), { on: true, pinned: true });
+  assert.deepEqual(usbDebugState("1", "mtp,adb"), { on: true, pinned: true });
+  // Pinned off, even though the function list still advertises adb.
+  assert.deepEqual(usbDebugState("0", "mtp,adb"), { on: false, pinned: true });
+  assert.deepEqual(usbDebugState("0", "mtp"), { on: false, pinned: true });
+});
+
+test("usbDebugState falls back to the function list when nothing is recorded", () => {
+  // A device that has never used the switch: no record, so the live list is the truth.
+  assert.deepEqual(usbDebugState("", "mtp,adb"), { on: true, pinned: false });
+  assert.deepEqual(usbDebugState("", "mtp"), { on: false, pinned: false });
+  assert.deepEqual(usbDebugState(null, ""), { on: false, pinned: false });
+  assert.deepEqual(usbDebugState(undefined, "adb"), { on: true, pinned: false });
+  // An unparseable record is treated as no record at all, not as "off".
+  assert.deepEqual(usbDebugState("maybe", "mtp,adb"), { on: true, pinned: false });
+});
+
+test("usbDebugState accepts the property spellings of a boolean", () => {
+  for (const [pin, on] of [["1", true], ["0", false], ["true", true], ["false", false], [" TRUE ", true], [" FALSE ", false]]) {
+    assert.deepEqual(usbDebugState(pin, "mtp"), { on, pinned: true }, String(pin));
+  }
+});
