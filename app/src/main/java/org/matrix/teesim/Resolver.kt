@@ -56,9 +56,11 @@ object Resolver {
                 // Always present a locked, Verified boot state. Module users run unlocked
                 // bootloaders, and reporting the device's real state (unlocked / Unverified) fails
                 // attestation by construction. These are the "required" overrides the WebUI shows
-                // read-only.
-                put("deviceLocked", true)
-                put("verifiedBootState", 0)
+                // read-only — and they are the same two values Harvester.bootStatePropValues()
+                // reconciles the boot-state system properties to, so the two views of the device
+                // never contradict each other.
+                put("deviceLocked", Harvester.PRESENTED_DEVICE_LOCKED)
+                put("verifiedBootState", Harvester.PRESENTED_VERIFIED_BOOT_STATE)
                 // Whether the device's StrongBox can really produce a hardware-backed attested key
                 // (probed at harvest). It gates patch mode at the StrongBox level: when false, keys
                 // requested at StrongBox fall back to generation even in a patch profile.

@@ -131,6 +131,23 @@ test("rules translate the sentences assembled from variables", () => {
   for (const [en, zh] of pairs) assert.equal(i18n.t(en), zh, `t(${JSON.stringify(en)})`);
   i18n.setLocale("en");
 });
+test("the system-property card's counts, warnings and empty state are translated", () => {
+  // The card assembles its summary from three numbers and its two warnings from a count, so these go
+  // through RULES rather than the dictionary — the same path the other built sentences take.
+  i18n.setLocale("zh");
+  const pairs = [
+    ["System properties", "系统属性"],
+    ["No properties set.", "未设置任何属性。"],
+    ["Cannot read hide_props.conf", "无法读取 hide_props.conf"],
+    ["1 property — 1 hidden, 0 pinned", "1个属性 —— 1个隐藏，0个固定"],
+    ["3 properties — 2 hidden, 1 pinned", "3个属性 —— 2个隐藏，1个固定"],
+    ["1 line was ignored (it has no value after name=).", "忽略了 1 行（name= 之后没有值）。"],
+    ["2 lines were ignored (they have no value after name=).", "忽略了 2 行（name= 之后没有值）。"],
+    ["These do not look like property names: 1bad", "这些看起来不像属性名：1bad"],
+  ];
+  for (const [en, zh] of pairs) assert.equal(i18n.t(en), zh, `t(${JSON.stringify(en)})`);
+  i18n.setLocale("en");
+});
 
 test("dictionary keys are unique modulo case, so the folded lookup stays unambiguous", () => {
   // The render path retries a lookup case-insensitively (ZH_FOLDED in js/i18n.js), which is only

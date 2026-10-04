@@ -486,24 +486,92 @@ object App {
         }
 
     /**
-     * Force the matching ro.boot.vbmeta.* property to the boot key/hash we actually PRESENT (the
-     * override when one is active, else the real captured value), so anything reading those props
-     * directly sees exactly what attestation reports. We compare against the LIVE property and
+     * Force the system properties that describe the boot state to what we actually PRESENT, so
+     * anything reading them directly sees exactly what attestation reports.
+     *
+     * First the matching ro.boot.vbmeta.* properties, to the boot key/hash we attest (the override
+     * when one is active, else the real captured value). We compare against the LIVE property and
      * overwrite it on any mismatch — the value we attest wins unconditionally, whether the property
      * was empty (some bootloaders never populate ro.boot.vbmeta.digest — unlocked /
      * verification-disabled / OEM AVB, #228), stale, or changed by another module. A match is left
      * untouched, so a steady state does no work.
-     */
+     *
+     * Then the boot-state properties (`ro.boot.flash.locked`, the verified-boot states, the vbmeta
+     * device states, `sys.oem_unlock_allowed`), which [Harvester.bootStatePropValues] derives from
+     * the same locked/Verified state Resolver puts in bootInfo. Reporting "locked" through
+     * attestation while the device still advertises an unlocked bootloader through these properties
+     * is exactly the contradiction an integrity checker hunts for, so the property face is kept in
+* step with the attestation face. A line in hide_props.conf wins over the derived value — a bare
+      * name deletes the property, `name=value` pins it — and a line naming a property this daemon does
+      * not derive at all is applied too, so the file means one thing to it and to module/service.sh.
+      */
     private fun applyBootProps(h: Harvester.Record) {
         for ((prop, value) in Harvester.bootPropValues(h)) {
-            val live = DeviceProps.prop(prop, "")
-            if (live != value) {
-                SysProp.set(prop, value)
-                SystemLogger.info(
-                    "App: boot prop forced $prop to the attested value (was '${live.ifEmpty { "unset" }}')"
-                )
-            }
+            forceProp(prop, value)
         }
+        // The user's list is read from disk on every push, on purpose: saving it in the WebUI trips
+        // the DATA_DIR watcher, so an edit has to be in force by the time the next push goes out.
+        val hide = HideProps.directives()
+        for ((prop, value) in Harvester.bootStatePropValues()) {
+            val d = hide[prop]
+            if (d == null) forceProp(prop, value) else applyDirective(prop, d)
+        }
+        // sys.oem_unlock_allowed is deliberately absent from that map on Android 16+: there, ANY
+        // value of it counts as an OEM-unlock signal, so the property has to stop existing rather
+        // than hold "0". A hide_props.conf override still wins — a user who pins a value gets it.
+        if (Harvester.OEM_UNLOCK_MUST_BE_DELETED) {
+            val d = hide[Harvester.OEM_UNLOCK_ALLOWED]
+            if (d == null) hideProp(Harvester.OEM_UNLOCK_ALLOWED) else applyDirective(Harvester.OEM_UNLOCK_ALLOWED, d)
+        }
+        applyForeignHideDirectives(hide)
+    }
+
+    /**
+     * Carry out one `hide_props.conf` line: delete the property, or pin it to the user's value.
+     */
+    private fun applyDirective(prop: String, d: HideProps.Directive) {
+        when (d) {
+            is HideProps.Directive.Override -> forceProp(prop, d.value)
+            HideProps.Directive.Delete -> hideProp(prop)
+        }
+    }
+
+    /**
+     * Apply the `hide_props.conf` lines naming a property the boot-state reconciliation above does not
+     * itself own. They are the user's instruction all the same, and module/service.sh carries every
+     * line out at boot — so ignoring them here would make the two appliers disagree about a list they
+     * are supposed to read the same way, and would delay the edit to the next boot.
+     */
+    private fun applyForeignHideDirectives(hide: Map<String, HideProps.Directive>) {
+        for ((prop, d) in hide) {
+            if (prop in Harvester.BOOT_STATE_PROPS) continue
+            applyDirective(prop, d)
+        }
+    }
+
+    /**
+     * Set [prop] to [value] unless the live property already says it. Every prop touched this way is
+     * a `ro.*`/`sys.*` property a plain setprop cannot write, hence [SysProp]; a steady state writes
+     * nothing at all.
+     */
+    private fun forceProp(prop: String, value: String) {
+        val live = DeviceProps.prop(prop, "")
+        if (live == value) return
+        SysProp.set(prop, value)
+        SystemLogger.info(
+            "App: boot prop forced $prop to the attested value '${value}' (was '${live.ifEmpty { "unset" }}')"
+        )
+    }
+
+    /**
+     * Delete [prop] when it exists at all: for a property whose mere existence is the signal being
+     * detected, leaving a benign value behind would defeat the point.
+     */
+    private fun hideProp(prop: String) {
+        val live = DeviceProps.prop(prop, "")
+        if (live.isEmpty()) return
+        SysProp.delete(prop)
+        SystemLogger.info("App: boot prop $prop hidden (was '$live')")
     }
 
     /**

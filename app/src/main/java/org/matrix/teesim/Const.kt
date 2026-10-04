@@ -14,6 +14,13 @@ object Const {
      * key). Written by the WebUI, merged over the frozen captured harvest on every push.
      */
     val overridesFile = File(DATA_DIR, "overrides.json")
+    /**
+     * Per-property hide/override list for the boot-state properties the daemon reconciles on every
+     * push. Edited in the WebUI's System screen; applied here (so a change wins over the derived
+     * value) and by module/service.sh at boot (so it still takes effect if the daemon never starts).
+     * See [HideProps] for the line syntax.
+     */
+    val hidePropsFile = File(DATA_DIR, "hide_props.conf")
     val adminTokenFile = File(DATA_DIR, "admin.token")
 
     /**

@@ -1,8 +1,10 @@
-// Owns the System screen: the read-only daemon/harvest status poll, the USB-debugging pin, and the
-// canary updater. Nothing here reaches the shell except through the daemon seam (data/status.js and
-// data/keyadmin.js) or the pin's own adapter (data/usb-io.js). It degrades gracefully — an
-// unreachable daemon yields a well-formed "unreachable" health snapshot and simply no update
-// badge, and an unreadable property yields a card that says so, never a thrown error.
+// Owns the System screen: the read-only daemon/harvest status poll, the USB-debugging pin, the
+// boot-property hiding list, and the canary updater. Nothing here reaches the shell except through
+// the daemon seam (data/status.js and data/keyadmin.js) or one of the two device-level adapters
+// (data/usb-io.js for the pin, data/hide-props-io.js for hide_props.conf). It degrades gracefully —
+// an unreachable daemon yields a well-formed "unreachable" health snapshot and simply no update
+// badge, and an unreadable property or property list yields a card that says so, never a thrown
+// error.
 //
 // create(mount, { onHealth, onBadge })
 //   onHealth(status)  report the latest health snapshot up to the top-bar pill
@@ -15,6 +17,7 @@ import { getStatus } from "../data/status.js";
 import { keyAdmin } from "../data/keyadmin.js";
 import * as overridesIo from "../data/overrides-io.js";
 import { readUsbDebug, setUsbDebug } from "../data/usb-io.js";
+import { HIDE_PROPS, loadHideProps, saveHideProps } from "../data/hide-props-io.js";
 import { renderSystem, refreshHealth as patchHealthCards } from "../ui/system-view.js";
 import { toast, confirmDialog } from "../ui/dom.js";
 
@@ -36,6 +39,7 @@ export function create(mount, opts = {}) {
   let installError = null;
   let notesOpen = false;
   let usb = null;         // the USB-debug pin: { on, pinned, pin, config, … }, or null when unreadable
+  let props = null;       // hide_props.conf: { text, path }, or { error } when it could not be read
 
   let timer = null;
   let inFlight = false;
@@ -47,7 +51,7 @@ export function create(mount, opts = {}) {
   const canarySignature = () => JSON.stringify({ probed, update });
 
   function render() {
-    renderSystem(mount, { status, update, probed, variant, installing, installError, notesOpen, usb }, actions);
+    renderSystem(mount, { status, update, probed, variant, installing, installError, notesOpen, usb, props }, actions);
     canarySig = canarySignature();
   }
 
@@ -55,6 +59,15 @@ export function create(mount, opts = {}) {
   // screen is shown and after every flip — never on the health poll (it cannot change by itself).
   async function refreshUsb() {
     usb = await readUsbDebug();
+    render();
+  }
+
+  // The boot-property list is one file, so it is read when the screen is shown and after every save,
+  // and never on the health poll — nothing else can change it under us. An unreadable file becomes
+  // { error } rather than an empty box, which would read as "nothing is hidden".
+  async function refreshProps() {
+    const res = await loadHideProps();
+    props = res.ok ? { text: res.text, path: HIDE_PROPS } : { error: res.error };
     render();
   }
 
@@ -123,6 +136,16 @@ export function create(mount, opts = {}) {
       render();
     },
 
+    // Persist the property list. Blank text removes the file, which both appliers read exactly like
+    // an empty one ("nothing hidden"); the daemon's DATA_DIR watcher re-reconciles the boot properties
+    // the moment it lands, so the re-read below shows what the device will actually parse.
+    async onSaveProps(text) {
+      const res = await saveHideProps(text);
+      if (res && res.ok === false) { toast("Save failed: " + res.error); return; }
+      toast("Saved");
+      await refreshProps();
+    },
+
     onSelectVariant(v) {
       if (v === variant) return;
       variant = v;
@@ -185,6 +208,7 @@ export function create(mount, opts = {}) {
       refreshHealth();
       probeCanary();
       refreshUsb();        // the pin's two properties, read once per visit
+      refreshProps();      // the boot-property list, read once per visit
     },
   };
 }

@@ -460,6 +460,10 @@ html, body { overscroll-behavior-y: contain; }
   color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); }
 .ov-input.mono { font-family: ui-monospace, monospace; font-size: 12px; }
 .ov-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+/* The hide_props.conf editor (System screen). A textarea in the .field stack: it takes the whole
+ * width and a height of its own instead of inheriting the one-line input's flex basis, and it stays
+ * resizable because a list of a dozen properties is a normal thing to want to see at once. */
+.props-input { flex: none; width: 100%; height: 132px; resize: vertical; line-height: 1.5; }
 .btn.small { padding: 5px 10px; font-size: 12px; flex: none; }
 
 /* --- keybox inspector --------------------------------------------------- */

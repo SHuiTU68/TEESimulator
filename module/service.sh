@@ -61,6 +61,50 @@ case "$pin" in
     ;;
 esac
 
+# --- system-property hiding (hide_props.conf) --------------------------------
+# Per-property control over the boot-state properties the daemon reconciles on every push. One entry
+# per line: a bare property name DELETES it, "name=value" OVERRIDES it. A '#' starts a comment that
+# runs to the end of the line, and whitespace is insignificant. A property that is not listed is
+# still synced to the value derived from the locked/Verified boot state we attest — the list only
+# ever takes a property away or pins it.
+#
+# The daemon honours the same file, line for line (HideProps.kt), so an edit made in the WebUI is
+# picked up on the next push without a reboot; this copy is here so the list also applies when the
+# daemon never gets to run. Both read the one file, so the two can never disagree. Silent when absent.
+HIDE_PROPS=/data/adb/teesim/hide_props.conf
+if [ -f "$HIDE_PROPS" ]; then
+  # resetprop is the manager's binary; MAGISK, KernelSU and APatch each keep it somewhere different.
+  RP=""
+  for c in /system_ext/bin/resetprop /system/bin/resetprop /data/adb/ksu/bin/resetprop /data/adb/magisk/resetprop; do
+    if [ -x "$c" ]; then
+      RP=$c
+      break
+    fi
+  done
+  [ -n "$RP" ] || RP=$(command -v resetprop 2>/dev/null)
+  if [ -n "$RP" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      line=${line%%#*}
+      # Whitespace is insignificant, so "ro.boot.flash.locked = 1" reads like "ro.boot.flash.locked=1".
+      line=$(printf '%s' "$line" | tr -d '[:space:]')
+      [ -n "$line" ] || continue
+      case "$line" in
+        *=*)
+          # A half-written line ("=1", "prop=") pins nothing and hides nothing, so skip it rather
+          # than write an empty value.
+          name=${line%%=*}
+          value=${line#*=}
+          [ -n "$name" ] && [ -n "$value" ] || continue
+          "$RP" -n "$name" "$value" >/dev/null 2>&1
+          ;;
+        *)
+          "$RP" -d "$line" >/dev/null 2>&1
+          ;;
+      esac
+    done < "$HIDE_PROPS"
+  fi
+fi
+
 while true; do
   "$MODDIR/daemon" "$MODDIR"
   sleep 2

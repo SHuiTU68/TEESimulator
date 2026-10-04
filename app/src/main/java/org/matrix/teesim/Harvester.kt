@@ -159,6 +159,69 @@ object Harvester {
             ?.let { put(BOOT_PROP.getValue("verifiedBootHash"), it.toHex()) }
     }
 
+    /**
+     * The boot state we PRESENT, and therefore the one every boot-state property is reconciled to.
+     * [Resolver] writes exactly these two values into every push's bootInfo; they live here as well
+     * so the properties below can never drift from the attestation — a device that answers "locked,
+     * Verified" through attestation while still advertising an unlocked bootloader through its system
+     * properties is the exact contradiction an integrity checker looks for.
+     */
+    const val PRESENTED_DEVICE_LOCKED = true
+
+    const val PRESENTED_VERIFIED_BOOT_STATE = 0 // Verified
+
+    /**
+     * `sys.oem_unlock_allowed`. On Android 16+ (SDK 36) DuckDetector-class checkers treat ANY value
+     * of it — including `0` — as an OEM-unlock signal, so the property must not exist at all; below
+     * that the app-observable `0` is what matters and it is written.
+     */
+    const val OEM_UNLOCK_ALLOWED = "sys.oem_unlock_allowed"
+
+    /**
+     * Which of those two modes is in force. [bootStatePropValues] and [App.applyBootProps] both ask
+     * this one question, so the map they share and the deletion cannot disagree about the answer.
+     */
+    val OEM_UNLOCK_MUST_BE_DELETED: Boolean = Build.VERSION.SDK_INT >= 36
+
+    /**
+     * The boot-state properties a locked, verified stock device exposes, reconciled on every push so
+     * the visible system state agrees with [PRESENTED_DEVICE_LOCKED] / [PRESENTED_VERIFIED_BOOT_STATE]:
+     *
+     * - `ro.boot.flash.locked` = `1`
+     * - `ro.boot.verifiedbootstate` / `vendor.boot.verifiedbootstate` = `green`
+     * - `ro.boot.vbmeta.device_state` / `vendor.boot.vbmeta.device_state` = `locked`
+     *
+     * These are constants, not derived from [h]: the device this module runs on is unlocked by
+     * construction, so a "truthful" value here would be the very thing we are hiding. On Android 16+
+     * [OEM_UNLOCK_ALLOWED] is omitted — it is deleted rather than written.
+     */
+    fun bootStatePropValues(): Map<String, String> {
+        val locked = PRESENTED_DEVICE_LOCKED
+        val vbState = if (PRESENTED_VERIFIED_BOOT_STATE == 0) "green" else "orange"
+        val deviceState = if (locked) "locked" else "unlocked"
+        return buildMap {
+            put("ro.boot.flash.locked", if (locked) "1" else "0")
+            put("ro.boot.verifiedbootstate", vbState)
+            put("vendor.boot.verifiedbootstate", vbState)
+            put("ro.boot.vbmeta.device_state", deviceState)
+            put("vendor.boot.vbmeta.device_state", deviceState)
+            if (!OEM_UNLOCK_MUST_BE_DELETED) {
+                put(OEM_UNLOCK_ALLOWED, if (locked) "0" else "1")
+            }
+        }
+    }
+
+    /** Every property name [bootStatePropValues] owns, so the hidable set can be checked. */
+    val BOOT_STATE_PROPS =
+        setOf(
+            "ro.boot.flash.locked",
+            "ro.boot.verifiedbootstate",
+            "vendor.boot.verifiedbootstate",
+            "ro.boot.vbmeta.device_state",
+            "vendor.boot.vbmeta.device_state",
+            OEM_UNLOCK_ALLOWED,
+        )
+
     private fun sourceFor(field: String): OverrideSource =
         when {
             field in SUPPLEMENT_IDS -> OverrideSource.SUPPLEMENT

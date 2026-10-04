@@ -1,9 +1,9 @@
-// The System screen: daemon health, harvest summary, the USB-debugging pin, and the
-// canary updater — the device-level concerns on one read-mostly screen.
+// The System screen: daemon health, harvest summary, the USB-debugging pin, the system-property
+// hiding list, and the canary updater — the device-level concerns on one read-mostly screen.
 // Pure presentation: it renders from the state the controller hands it and emits
 // every intent through `actions`. It never imports data/* or bridge/*; the update
-// probe/install and the USB pin's reads and writes all happen in the controller
-// through the daemon seam.
+// probe/install, the USB pin's reads and writes, and the property list's load/save all happen in the
+// controller through the daemon seam or their own adapter.
 //
 // renderSystem(mount, state, actions)
 //   state = {
@@ -15,23 +15,28 @@
 //     installError, // string | null — surfaced as a .banner.error
 //     notesOpen,    // "What's new" disclosure state
 //     usb,          // { on, pinned, pin, config, prop, configProp } | null (null = not readable)
+//     props,        // { text, path } | { error } | null (null = not read yet)
 //   }
-//   actions = { onInstall(), onSelectVariant(v), onToggleNotes(), onToggleUsbDebug(on) }
+//   actions = { onInstall(), onSelectVariant(v), onToggleNotes(), onToggleUsbDebug(on),
+//               onSaveProps(text) }
 
 import { el, clear, disclosure } from "./dom.js";
 import { renderMarkdown } from "./markdown.js";
+import { t } from "../i18n.js";
+import { parseHideProps, summarize, suspiciousNames } from "../domain/hide-props.js";
 
 export function renderSystem(mount, state, actions) {
   clear(mount);
   const { status = null, update = null, probed = false,
           variant = "release", installing = false, installError = null, notesOpen = false,
-          usb = null } = state;
+          usb = null, props = null } = state;
 
   mount.appendChild(el("div", { class: "panel-head" }, [el("h1", { class: "panel-title", text: "System" })]));
 
   mount.appendChild(tag(healthCard(status), "health"));
   mount.appendChild(tag(harvestCard(status, actions), "harvest"));
   mount.appendChild(tag(usbCard(usb, actions), "usb"));
+  mount.appendChild(tag(propsCard(props, actions), "props"));
   mount.appendChild(tag(updateCard({ update, probed, variant, installing, installError, notesOpen }, actions), "update"));
 }
 
@@ -332,6 +337,82 @@ function usbCard(usb, actions = {}) {
       ]),
       sw,
     ]),
+  ]));
+  return card;
+}
+
+// --- system properties ---------------------------------------------------
+// The per-property half of the module's boot-state work. The daemon already reconciles a fixed set
+// of properties (the boot lock/verified state, the vbmeta device state, the OEM-unlock flag) to the
+// locked, Verified state it attests; this box is the escape hatch on top of that — a property whose
+// VALUE is dangerous can be hidden (a bare name) or pinned (name=value), and the same file is
+// honoured by the daemon on the next push and by module/service.sh on every boot.
+//
+// It is a plain textarea rather than a form: the file is line-oriented, and showing the user exactly
+// what the device will parse beats a control that hides the grammar. The summary under it re-parses
+// the box on every keystroke — in place, never through a re-render, which would rebuild the box and
+// drop the caret — so a typo is visible before it is saved.
+function propsCard(props, actions = {}) {
+  const card = el("div", { class: "card" }, [el("h2", { text: "System properties" })]);
+  if (!props) {
+    card.appendChild(el("p", { class: "muted", text: "Reading…" }));
+    return card;
+  }
+  if (props.error) {
+    // The file may exist but be unreadable (no root shell, no bridge). Say so rather than show an
+    // empty box that would read as "nothing is hidden" — and, worse, as "safe to save".
+    card.appendChild(el("div", { class: "banner error" }, [
+      el("div", { text: "Cannot read hide_props.conf" }),
+      el("div", { class: "muted small", text: props.error }),
+    ]));
+    return card;
+  }
+
+  const ta = el("textarea", {
+    class: "ov-input mono props-input",
+    rows: "6",
+    spellcheck: "false",
+    autocapitalize: "none",
+    autocomplete: "off",
+    value: props.text,
+    oninput: () => refresh(),
+  });
+
+  const counts = el("span", { class: "muted small" });
+  const ignored = el("span", { class: "field-help" });
+  const odd = el("span", { class: "field-help" });
+
+  // The live read of the box: the same grammar the daemon and module/service.sh implement, applied
+  // to what is typed right now. Each line is assigned through t() because only el() and toast()
+  // translate automatically, and these are built after the fact.
+  function refresh() {
+    const { entries, ignored: junk } = parseHideProps(ta.value);
+    const { total, hidden, pinned } = summarize(entries);
+    counts.textContent = total
+      ? t(`${total} ${total === 1 ? "property" : "properties"} — ${hidden} hidden, ${pinned} pinned`)
+      : t("No properties set.");
+    ignored.textContent = junk.length === 1
+      ? t("1 line was ignored (it has no value after name=).")
+      : t(`${junk.length} lines were ignored (they have no value after name=).`);
+    ignored.hidden = junk.length === 0;
+    // Advisory only: both appliers hand the name straight to resetprop, so a name this rejects is
+    // still attempted on the device — it is usually just a typo, and worth spotting before saving.
+    const names = suspiciousNames(entries);
+    odd.textContent = t("These do not look like property names: ") + names.join(", ");
+    odd.hidden = names.length === 0;
+  }
+  refresh();
+
+  card.appendChild(el("div", { class: "field" }, [
+    el("span", { class: "field-help", text: "One property per line: a bare name hides it, name=value pins it. Anything unlisted is still synced to the locked, verified boot state the module attests." }),
+    ta,
+    el("div", { class: "update-actions" }, [
+      counts,
+      el("button", { class: "btn primary", type: "button", text: "Save", onclick: () => actions.onSaveProps && actions.onSaveProps(ta.value) }),
+    ]),
+    ignored,
+    odd,
+    props.path ? el("span", { class: "field-help mono", text: props.path }) : null,
   ]));
   return card;
 }

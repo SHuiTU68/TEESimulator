@@ -13,6 +13,7 @@ import {
 } from "../js/domain/schema.js";
 import { validateConfig, validateProfile } from "../js/domain/validate.js";
 import { ADB, DEFAULT_FUNCTIONS, hasAdb, withAdb, usbDebugState } from "../js/domain/usb.js";
+import { PROP_NAME_RE, parseHideProps, summarize, suspiciousNames } from "../js/domain/hide-props.js";
 
 // A minimal profile that should pass: defaults from emptyProfile() + one app.
 function validProfile(apps = ["com.example.app"]) {
@@ -305,5 +306,66 @@ test("usbDebugState falls back to the function list when nothing is recorded", (
 test("usbDebugState accepts the property spellings of a boolean", () => {
   for (const [pin, on] of [["1", true], ["0", false], ["true", true], ["false", false], [" TRUE ", true], [" FALSE ", false]]) {
     assert.deepEqual(usbDebugState(pin, "mtp"), { on, pinned: true }, String(pin));
+  }
+});
+
+// --- hide_props.conf (domain/hide-props.js) ----------------------------------
+// The line grammar the module implements three times: here (the System screen's live summary), in
+// the daemon (HideProps.kt, which reconciles the boot-state properties on every push) and in
+// module/service.sh (the applier that runs even when the daemon never starts). These tests lock the
+// grammar down, because the other two implementations cannot be unit-tested from here.
+test("parseHideProps reads a bare name as a delete and name=value as a pin", () => {
+  assert.deepEqual(parseHideProps("sys.oem_unlock_allowed\nro.boot.flash.locked=1\n"), {
+    entries: [{ name: "sys.oem_unlock_allowed", value: "" }, { name: "ro.boot.flash.locked", value: "1" }],
+    ignored: [],
+  });
+});
+
+test("parseHideProps drops comments and treats whitespace as insignificant", () => {
+  // A '#' runs to the end of its line, and the list is a list of NAMES, so a value can never pick up
+  // a stray space — the reading the shell applier reaches with `tr -d '[:space:]'`.
+  const text = "# the whole line is a comment\n\n   \nro.boot.verifiedbootstate = green   # inline\n";
+  assert.deepEqual(parseHideProps(text).entries, [{ name: "ro.boot.verifiedbootstate", value: "green" }]);
+  assert.deepEqual(parseHideProps("# only a comment\n").entries, []);
+});
+
+test("parseHideProps keeps any '=' inside a value", () => {
+  assert.deepEqual(parseHideProps("ro.foo=a=b").entries, [{ name: "ro.foo", value: "a=b" }]);
+});
+
+test("parseHideProps reports a half-written line instead of acting on it", () => {
+  // "=1" and "prop=" are what a typo looks like. Neither pins nor hides anything (an empty value is
+  // not what was meant), so they are counted and shown rather than handed to resetprop.
+  const { entries, ignored } = parseHideProps("=1\nro.boot.flash.locked=\nro.ok=1\n");
+  assert.deepEqual(entries, [{ name: "ro.ok", value: "1" }]);
+  assert.deepEqual(ignored, ["=1", "ro.boot.flash.locked="]);
+});
+
+test("parseHideProps tolerates an absent file and CRLF line endings", () => {
+  // An absent file is "the user asked for nothing", never an error.
+  assert.deepEqual(parseHideProps(null), { entries: [], ignored: [] });
+  assert.deepEqual(parseHideProps(undefined), { entries: [], ignored: [] });
+  assert.deepEqual(parseHideProps(""), { entries: [], ignored: [] });
+  assert.deepEqual(parseHideProps("a\r\nb=2\r\n").entries, [{ name: "a", value: "" }, { name: "b", value: "2" }]);
+});
+
+test("summarize splits the list into hidden and pinned", () => {
+  const list = [{ name: "a", value: "" }, { name: "b", value: "2" }, { name: "c", value: "" }];
+  assert.deepEqual(summarize(list), { total: 3, hidden: 2, pinned: 1 });
+  assert.deepEqual(summarize([]), { total: 0, hidden: 0, pinned: 0 });
+  assert.deepEqual(summarize(null), { total: 0, hidden: 0, pinned: 0 }, "a non-array must not throw");
+});
+
+test("suspiciousNames flags only the names that cannot be a property", () => {
+  // Purely advisory — both appliers hand the name to resetprop anyway — so it only has to be right
+  // about what a property name looks like.
+  const entries = [{ name: "ro.boot.flash.locked", value: "1" }, { name: "1bad", value: "" }, { name: "-x", value: "" }];
+  assert.deepEqual(suspiciousNames(entries), ["1bad", "-x"]);
+  assert.deepEqual(suspiciousNames(null), []);
+  for (const ok of ["ro.debuggable", "persist.sys.usb.config", "sys.oem_unlock_allowed", "a"]) {
+    assert.equal(PROP_NAME_RE.test(ok), true, ok);
+  }
+  for (const bad of ["1a", "-a", "a b", "", "a!"]) {
+    assert.equal(PROP_NAME_RE.test(bad), false, bad);
   }
 });

@@ -198,8 +198,10 @@ object ConfigStore {
     private var observer: FileObserver? = null
 
     /**
-     * Watch the data dir for config.json / keybox changes and invoke [onChange]. Uses the
-     * directory-level FileObserver (editors write via a temp file + rename).
+     * Watch the data dir for config.json / hide_props.conf / keybox changes and invoke [onChange].
+     * Uses the directory-level FileObserver (editors write via a temp file + rename). hide_props.conf
+     * is on the list so that saving it from the WebUI re-runs the boot-property reconciliation
+     * immediately, rather than waiting for the next boot.
      */
     fun watch(onChange: () -> Unit) {
         File(Const.DATA_DIR).mkdirs()
@@ -208,7 +210,7 @@ object ConfigStore {
             object : FileObserver(File(Const.DATA_DIR), mask) {
                 override fun onEvent(event: Int, path: String?) {
                     path ?: return
-                    if (path == "config.json" || path.endsWith(".xml")) {
+                    if (path == "config.json" || path == "hide_props.conf" || path.endsWith(".xml")) {
                         SystemLogger.info("ConfigStore: change detected in $path")
                         onChange()
                     }

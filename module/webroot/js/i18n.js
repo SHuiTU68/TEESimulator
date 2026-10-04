@@ -459,6 +459,13 @@ const ZH = {
   "Written to a system property and re-applied at every boot, so turning USB debugging off keeps it off after a reboot — and leaving it on keeps it on.":
     "会写入系统属性，并在每次开机时重新应用：关闭后重启依旧是关闭状态，开启后同样保持开启。",
 
+  // ---- system properties (the hide_props.conf card) ------------------------
+  "System properties": "系统属性",
+  "No properties set.": "未设置任何属性。",
+  "Cannot read hide_props.conf": "无法读取 hide_props.conf",
+  "One property per line: a bare name hides it, name=value pins it. Anything unlisted is still synced to the locked, verified boot state the module attests.":
+    "每行一个属性：只写名称即隐藏该属性，写成 name=value 则固定为指定值。未列出的属性仍会同步为模块所认证的“已锁定、已验证”启动状态。",
+
   // ---- identity fields (schema labels) -------------------------------------
   Apps: "应用",
   "Auto-include new apps": "自动包含新应用",
@@ -637,4 +644,11 @@ const RULES = [
   [/^Flashes (.*) over the current module, then reboot to apply\.$/, "会把 $1 刷写到当前模块之上，重启后生效。"],
   [/^build (.*)$/, "构建 $1"],
   [/^(\d+) apps? targeted$/, "已覆盖 $1 个应用"],
+
+  // ---- system properties (the hide_props.conf card) ----
+  // The card's counts are assembled from three numbers, so the sentence is a rule, not a key.
+  [/^(\d+) propert(?:y|ies) — (\d+) hidden, (\d+) pinned$/, (m) => `${m[1]}个属性 —— ${m[2]}个隐藏，${m[3]}个固定`],
+  [/^1 line was ignored \(it has no value after name=\)\.$/, "忽略了 1 行（name= 之后没有值）。"],
+  [/^(\d+) lines were ignored \(they have no value after name=\)\.$/, "忽略了 $1 行（name= 之后没有值）。"],
+  [/^These do not look like property names: (.*)$/, "这些看起来不像属性名：$1"],
 ];
