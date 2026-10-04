@@ -52,8 +52,10 @@ android {
         versionName = verName
         externalNativeBuild {
             cmake {
-                // The interceptors are 64-bit only (keystore2 is 64-bit everywhere).
-                abiFilters += listOf("arm64-v8a", "x86_64")
+                // This fork is arm64-only: one ABI keeps the module (and its Rust TA) small, and the
+                // interceptors are injected into a device that is already running the same
+                // architecture — a second ABI is dead weight nobody here installs.
+                abiFilters += listOf("arm64-v8a")
                 // Match package.sh: build the injector, the UDS client, the daemon's log reader,
                 // and both interceptors; the static BoringSSL `crypto` target builds transitively
                 // for keystore.

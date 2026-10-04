@@ -134,14 +134,12 @@ else()
 endif()
 
 # --- The in-process TA (Rust static library) --------------------------------
+# This fork builds arm64-v8a only, so the ABI -> Rust triple map has exactly one entry. Anything
+# else fails here, loudly, instead of producing an empty RUST_TRIPLE and an unreadable path.
 if(ANDROID_ABI STREQUAL "arm64-v8a")
   set(RUST_TRIPLE aarch64-linux-android)
-elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
-  set(RUST_TRIPLE armv7-linux-androideabi)
-elseif(ANDROID_ABI STREQUAL "x86_64")
-  set(RUST_TRIPLE x86_64-linux-android)
-elseif(ANDROID_ABI STREQUAL "x86")
-  set(RUST_TRIPLE i686-linux-android)
+else()
+  message(FATAL_ERROR "teesim: unsupported ANDROID_ABI '${ANDROID_ABI}' (arm64-v8a only)")
 endif()
 
 set(RUST_A ${CMAKE_SOURCE_DIR}/rust/target/${RUST_TRIPLE}/release/libteesim_km.a)

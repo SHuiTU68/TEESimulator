@@ -5,7 +5,7 @@
 # keystore2, so the build needs only BoringSSL's headers (openssl-sys bindgens the
 # FFI from them) — no libcrypto.so of any ABI. Configure via environment:
 #   NDK_HOME   Android NDK (default: newest under $ANDROID_HOME/ndk)
-#   ABI        Android ABI (default: arm64-v8a)
+#   ABI        Android ABI (default: arm64-v8a — the only one this fork builds)
 #   API        platform level (default: 29)
 #   BORINGSSL  BoringSSL source dir with include/ (cloned if unset/missing)
 set -euo pipefail
@@ -15,12 +15,11 @@ ROOT="$(cd "$HERE/.." && pwd)"
 ABI="${ABI:-arm64-v8a}"
 API="${API:-29}"
 
+# This fork builds one ABI, so anything other than arm64-v8a is a configuration error rather than a
+# second target to support.
 case "$ABI" in
   arm64-v8a)   TRIPLE=aarch64-linux-android ;;
-  armeabi-v7a) TRIPLE=armv7-linux-androideabi ;;
-  x86_64)      TRIPLE=x86_64-linux-android ;;
-  x86)         TRIPLE=i686-linux-android ;;
-  *) echo "unknown ABI: $ABI" >&2; exit 1 ;;
+  *) echo "unknown ABI: $ABI (this fork builds arm64-v8a only)" >&2; exit 1 ;;
 esac
 ENVPREFIX="$(echo "$TRIPLE" | tr '[:lower:]-' '[:upper:]_')"
 
