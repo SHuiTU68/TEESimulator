@@ -5,8 +5,18 @@
 //
 // Everything that builds an element goes through el() so no view ever concatenates
 // HTML strings (which also keeps user text out of any innerHTML path).
-
+//
+// That makes this file the app's single i18n boundary: every string it writes — a `text`
+// value, a string child, and the human-readable title / aria-label / placeholder / alt
+// attributes — passes through t() from js/i18n.js. Translating here (rather than rewriting
+// literals in each view) keeps the strings that carry logic — filter tokens, class names,
+// enum values — out of the translator's reach, so a language switch can never alter
+// behaviour. Values are never translated.
 import { pushOverlay, closeOverlay } from "./nav.js";
+import { t } from "../i18n.js";
+
+// Attributes whose value is human-readable copy rather than data: translated on write.
+const I18N_ATTR = new Set(["title", "aria-label", "placeholder", "alt"]);
 
 // el("div", {class:"card", onclick:fn}, [childNode, "text", ...])
 // attrs: className via `class`; DOM event handlers as on<Event> functions;
@@ -16,16 +26,17 @@ export function el(tag, attrs = {}, children = []) {
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v == null || v === false) continue;
     if (k === "class") node.className = v;
-    else if (k === "text") node.textContent = v; // always textContent — user text never touches innerHTML
+    else if (k === "text") node.textContent = t(v); // always textContent — user text never touches innerHTML
     else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2).toLowerCase(), v);
-    else if (k === "value") node.value = v;
+    else if (k === "value") node.value = v; // never translated: a form value is data, not copy
     else if (k === "checked" || k === "disabled" || k === "selected") node[k] = !!v;
+    else if (I18N_ATTR.has(k)) node.setAttribute(k, t(v)); // tooltips and accessible names are copy
     else node.setAttribute(k, v);
   }
   const kids = Array.isArray(children) ? children : [children];
   for (const c of kids) {
     if (c == null || c === false) continue;
-    node.append(c.nodeType ? c : document.createTextNode(String(c)));
+    node.append(c.nodeType ? c : document.createTextNode(t(String(c))));
   }
   return node;
 }
@@ -68,12 +79,12 @@ export const ICON_SORT = [{ d: "M4 6h16" }, { d: "M6 12h12" }, { d: "M9 18h6" }]
 
 // Transient toast. Owns the #toast host declared in index.html.
 export function toast(msg) {
-  const t = document.getElementById("toast");
-  if (!t) return;
-  t.textContent = msg;
-  t.classList.add("show");
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.classList.remove("show"), 1900);
+  const host = document.getElementById("toast"); // not `t`: that name is the translator here
+  if (!host) return;
+  host.textContent = t(msg);
+  host.classList.add("show");
+  clearTimeout(host._timer);
+  host._timer = setTimeout(() => host.classList.remove("show"), 1900);
 }
 
 // The shared overlay primitive behind every dialog, sheet, and drill-in. It puts

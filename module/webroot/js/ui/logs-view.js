@@ -9,6 +9,7 @@
 // inject markup.
 
 import { el, clear } from "./dom.js";
+import { t } from "../i18n.js";
 
 const LEVEL_CLASS = { V: "lv-v", D: "lv-d", I: "lv-i", W: "lv-w", E: "lv-e", F: "lv-f" };
 const LEVEL_RANK = { V: 0, D: 1, I: 2, W: 3, E: 4, F: 5 };
@@ -82,14 +83,14 @@ export function renderLogs(mount, state, actions) {
   const filter = state.filter || {};
   const filterBtn = shell.querySelector('[data-act="filter"]');
   filterBtn.classList.toggle("active", !!state.filterActive);
-  filterBtn.textContent = state.filterActive ? "Filter •" : "Filter";
+  filterBtn.textContent = t(state.filterActive ? "Filter •" : "Filter");
 
   const pauseBtn = shell.querySelector('[data-act="pause"]');
-  pauseBtn.textContent = state.paused ? "Resume" : "Pause";
+  pauseBtn.textContent = t(state.paused ? "Resume" : "Pause");
   pauseBtn.classList.toggle("active", state.paused);
 
   const msg = shell.querySelector('[data-role="msg"]');
-  msg.textContent = state.reachable ? "" : "daemon unreachable" + (state.error ? " — " + state.error : "");
+  msg.textContent = state.reachable ? "" : t("daemon unreachable") + (state.error ? " — " + state.error : "");
   msg.classList.toggle("off", !state.reachable);
   msg.hidden = state.reachable;
 

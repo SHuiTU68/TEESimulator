@@ -18,6 +18,7 @@ import { create as createKeyboxes } from "./controllers/keybox-controller.js";
 import { create as createKeys } from "./controllers/keyadmin-controller.js";
 import { create as createSystem } from "./controllers/system-controller.js";
 import { create as createLogs } from "./controllers/logs-controller.js";
+import { t, applyStatic, getLocaleMeta, onLocaleChange, toggleLocale } from "./i18n.js";
 
 // --- global diagnostics (inspect via Chrome DevTools, chrome://inspect) ---
 // Surface every uncaught error and rejected promise, so a failure anywhere in the WebUI
@@ -35,14 +36,20 @@ window.addEventListener("unhandledrejection", (e) => {
 // reaches across destinations to poke shared chrome.
 const healthEl = document.getElementById("health");
 const badgeEl = document.getElementById("update-badge");
+const langBtn = document.getElementById("lang");
+
+// Last health report, kept so a language switch can re-paint the pill: its label is copy,
+// and re-probing the daemon just to relabel it would be a wasted round trip.
+let lastHealth = null;
 
 function setHealth(status) {
+  lastHealth = status || null;
   const dot = healthEl.querySelector(".dot");
   const label = healthEl.querySelector(".healthpill-label");
   const ok = !!(status && status.reachable);
   dot.classList.toggle("ok", ok);
   dot.classList.toggle("off", !ok);
-  label.textContent = ok ? "running" : "unreachable";
+  label.textContent = t(ok ? "running" : "unreachable");
 }
 
 function setBadge(on) {
@@ -95,9 +102,36 @@ document.addEventListener("teesim:navigate", (e) => {
   if (panel && NAV[panel]) show(panel);
 });
 
-// Boot: seed the header pill and the System badge once, without switching to the
-// System screen. The probe degrades silently if the daemon is down (no pill error,
-// no badge) — same graceful degradation the Keys/System panels already use.
+// --- language ----------------------------------------------------------------
+// The WebUI's only language control. Tapping it cycles the locale; everything else follows
+// from the change event below. Controllers rebuild their mount from scratch on every load(),
+// so re-showing the current destination repaints the live screen in the new language, and
+// applyStatic() covers the copy that lives in index.html. An overlay that is already open
+// keeps the language it was built with until it is reopened: it holds uncommitted user input
+// (a Scope draft, a typed name), so switching under it would be the ruder surprise.
+function updateLangButton() {
+  if (!langBtn) return;
+  const meta = getLocaleMeta();
+  langBtn.textContent = meta.short;
+  langBtn.setAttribute("aria-label", t("Switch language") + " — " + meta.label);
+  langBtn.setAttribute("title", meta.label);
+}
+
+if (langBtn) langBtn.addEventListener("click", () => toggleLocale());
+
+onLocaleChange(() => {
+  applyStatic();
+  updateLangButton();
+  setHealth(lastHealth);
+  if (current) show(current);
+});
+
+// Boot: localize the static chrome and label the language button, then seed the header pill
+// and the System badge once, without switching to the System screen. The probe degrades
+// silently if the daemon is down (no pill error, no badge) — same graceful degradation the
+// Keys/System panels already use.
+applyStatic();
+updateLangButton();
 controllers.system.boot();
 
 // Default destination.

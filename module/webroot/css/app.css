@@ -21,6 +21,19 @@
 }
 .topbar-title { font-size: 17px; font-weight: 700; }
 
+/* The top bar's right-hand cluster: the language toggle and the health pill share one row. */
+.topbar-actions { display: inline-flex; align-items: center; gap: 8px; }
+/* Language toggle (js/i18n.js): shows the active locale's short code — "EN" / "中" — and
+   cycles to the next one on tap. Pill-shaped to match the health pill beside it. */
+.langbtn {
+  background: var(--chip); color: var(--muted); border: 1px solid var(--line);
+  border-radius: 999px; padding: 5px 11px;
+  font: inherit; font-size: 12px; font-weight: 700; line-height: 1.2;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.langbtn:active { background: var(--accent-weak); color: var(--accent); border-color: var(--accent); }
+.langbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 .healthpill {
   display: inline-flex; align-items: center; gap: 7px;
   background: var(--chip); border-radius: 999px; padding: 5px 12px;

@@ -93,8 +93,9 @@ A keybox carries the private keys and certificate chains the simulator signs wit
 A profile names its keybox by relative path, so several profiles can sign with different keyboxes. An app that is in no profile is transparent to the module — its keys go straight to the real hardware.
 
 ### WebUI
-
 Where the root manager supports it (KernelSU, APatch), the module ships a WebUI that edits profiles without a text editor: create and assign profiles, import and rename keyboxes, choose the operation mode, and set the patch/OS levels and device identity. It also manages the keys the simulator has stored — list, inspect the attestation record, and delete — surfaces the harvest and injection status and live daemon logs, and can download and flash a newer canary build in place.
+
+The interface ships in English (the default) and Simplified Chinese; the button on the right of the top bar switches between them, and the choice is remembered across reloads. Every user-visible string is translated at one boundary — `module/webroot/js/ui/dom.js`, as it writes text and accessible names into the DOM — so all five sections and every dialog are covered, while the strings that carry logic (filter tokens, class names, enum values, action names, paths) are deliberately left verbatim. The table itself is `module/webroot/js/i18n.js`: English source strings as keys, so a further language is another entry in `LOCALES` plus a lookup for that locale. `node tools/check-i18n.mjs` from `module/webroot` reports any string that would still render in English, and `node --test tests/i18n.test.mjs` checks the boundary itself.
 
 ## Building from source
 
