@@ -24,6 +24,14 @@ esac
 ENVPREFIX="$(echo "$TRIPLE" | tr '[:lower:]-' '[:upper:]_')"
 
 if [ -z "${NDK_HOME:-}" ]; then
+  # An explicit NDK_HOME (CMake passes Gradle's pinned one) wins; otherwise honour the
+  # ANDROID_NDK_HOME/ANDROID_NDK_ROOT the caller exported (CI's pinned NDK_VERSION) before
+  # falling back to the newest installed NDK. The fallback is the trap: a newer preinstalled NDK
+  # (the runner image ships r30) rejects cargo-ndk's unversioned bindgen target triple
+  # ("Unversioned target triples are not supported!"), failing openssl-sys even though CI pins r28.
+  NDK_HOME="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
+fi
+if [ -z "${NDK_HOME:-}" ]; then
   NDK_HOME="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/ndk/* 2>/dev/null | sort -V | tail -1)"
 fi
 [ -d "$NDK_HOME" ] || { echo "NDK not found; set NDK_HOME" >&2; exit 1; }
