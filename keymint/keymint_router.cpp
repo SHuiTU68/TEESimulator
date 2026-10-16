@@ -24,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "control.h"
@@ -86,6 +87,52 @@ struct Profile {
 // Live routing, swapped atomically by teesim_cfg_commit under g_cfg_mu.
 std::mutex g_cfg_mu;
 std::vector<Profile> g_profiles;
+
+// Flat lookup indices over g_profiles, rebuilt together with it under g_cfg_mu (see RebuildIndex).
+// The routing paths run on every hooked KeyMint call — ProfileForRequest on each begin/generateKey,
+// PackageNameFor on every entry point's log prefix, teesim_is_target_uid on the RKP gate — so none of
+// them may walk g_profiles per request. These turn a uid lookup into one hash probe and the
+// package-name scan into a single flat walk.
+struct PackageRef {
+  std::string name;    // substring-matched against an attestation application id
+  int32_t user_id = 0;
+  size_t profile = 0;  // index into g_profiles
+};
+std::vector<PackageRef> g_pkg_index;                     // every profile's packages, in routing order
+std::unordered_map<int32_t, size_t> g_uid_index;         // caller uid -> g_profiles index
+std::unordered_map<int32_t, std::string> g_uid_name;     // caller uid -> resolved package name (log)
+std::unordered_map<int32_t, std::string> g_appid_name;   // app id -> package name (cross-user log fallback)
+
+// (Re)build every index above from the current g_profiles. The caller holds g_cfg_mu. Insertion order
+// preserves the linear scans' "first profile wins" for a duplicate uid/app id (which config
+// validation forbids, but the routing must stay deterministic if one slips through).
+void RebuildIndex() {
+  size_t n_pkgs = 0, n_uids = 0;
+  for (const auto& p : g_profiles) {
+    n_pkgs += p.packages.size();
+    n_uids += p.uids.size();
+  }
+  g_pkg_index.clear();
+  g_uid_index.clear();
+  g_uid_name.clear();
+  g_appid_name.clear();
+  g_pkg_index.reserve(n_pkgs);
+  g_uid_index.reserve(n_uids);
+  g_uid_name.reserve(n_uids);
+  for (size_t pi = 0; pi < g_profiles.size(); ++pi) {
+    const Profile& p = g_profiles[pi];
+    for (const auto& pkg : p.packages) g_pkg_index.push_back({pkg.name, pkg.user_id, pi});
+    for (size_t i = 0; i < p.uids.size(); ++i) {
+      const int32_t uid = p.uids[i];
+      const bool has_name = i < p.uid_names.size() && !p.uid_names[i].empty();
+      g_uid_index.emplace(uid, pi);
+      g_uid_name.emplace(uid, has_name ? p.uid_names[i] : std::string());
+      // Only a named uid seeds the cross-user fallback, so a bare uid:N target never names another
+      // user's instance of the same app id.
+      if (has_name) g_appid_name.emplace(uid % kPerUserRange, p.uid_names[i]);
+    }
+  }
+}
 // Signalled by teesim_cfg_commit. Operations on one of our own key blobs wait on this rather than
 // failing while the daemon has not pushed a config yet; see WaitForDefaultTa.
 std::condition_variable g_cfg_cv;
@@ -202,30 +249,31 @@ RequestTarget ProfileForRequest(const std::vector<KeyParameter>& params, uid_t c
     if (p.value.getTag() != KeyParameterValue::blob) continue;
     const auto& id = p.value.get<KeyParameterValue::blob>();
     std::string hay(id.begin(), id.end());
-    for (const auto& prof : g_profiles) {
-      for (const auto& pkg : prof.packages) {
-        if (hay.find(pkg.name) == std::string::npos) continue;
-        if (caller_user >= 0 && pkg.user_id != caller_user) {
-          // A seam, not an outcome: it fires per candidate package on every request that carries an
-          // attestation application id, and says nothing a reader wants unless routing is the thing
-          // under investigation.
-          LOGD("ProfileForRequest: '%s' matches profile '%s' for user %d, not the caller's user "
-               "%d; skipped",
-               pkg.name.c_str(), prof.id.c_str(), pkg.user_id, caller_user);
-          continue;
-        }
-        return {prof.TaFor(level), prof.patch_mode, prof.id};
+    // g_pkg_index is every profile's packages flattened in exactly the order the nested loop used to
+    // walk them (profile by profile), so "first profile wins" is unchanged — only the walk is flat.
+    for (const auto& ref : g_pkg_index) {
+      if (hay.find(ref.name) == std::string::npos) continue;
+      if (caller_user >= 0 && ref.user_id != caller_user) {
+        // A seam, not an outcome: it fires per candidate package on every request that carries an
+        // attestation application id, and says nothing a reader wants unless routing is the thing
+        // under investigation.
+        LOGD("ProfileForRequest: '%s' matches profile '%s' for user %d, not the caller's user "
+             "%d; skipped",
+             ref.name.c_str(), g_profiles[ref.profile].id.c_str(), ref.user_id, caller_user);
+        continue;
       }
+      const Profile& prof = g_profiles[ref.profile];
+      return {prof.TaFor(level), prof.patch_mode, prof.id};
     }
   }
   // Fallback match: the caller's uid. An app creating an attestation KEY does so unattested — no
   // challenge, no app-id — so there is nothing to name-match, yet we must still route it to the app's
   // profile (and mint it in the TA) or the key it later attests is signed by a key we do not hold.
   if (caller_uid != static_cast<uid_t>(-1)) {
-    for (const auto& prof : g_profiles) {
-      for (int32_t uid : prof.uids) {
-        if (static_cast<uid_t>(uid) == caller_uid) return {prof.TaFor(level), prof.patch_mode, prof.id};
-      }
+    auto it = g_uid_index.find(static_cast<int32_t>(caller_uid));
+    if (it != g_uid_index.end()) {
+      const Profile& prof = g_profiles[it->second];
+      return {prof.TaFor(level), prof.patch_mode, prof.id};
     }
   }
   return {};
@@ -241,25 +289,20 @@ RequestTarget ProfileForRequest(const std::vector<KeyParameter>& params, uid_t c
 // AID_KEYSTORE. Pairing the uid with the pid says which it is.
 std::string PackageNameFor(int32_t uid) {
   std::lock_guard<std::mutex> lk(g_cfg_mu);
-  for (const auto& prof : g_profiles) {
-    for (size_t i = 0; i < prof.uids.size(); ++i) {
-      if (prof.uids[i] != uid) continue;
-      if (i < prof.uid_names.size()) return prof.uid_names[i];
-      return std::string();
-    }
-  }
-  // No exact match: a secondary-user caller carries uid = user * 100000 + app_id and shares its
-  // package with the primary-user entry of the same app id, so match on app id to name it rather
+  // g_uid_name holds exactly the first (uid, name) pair for every configured target uid, so an exact
+  // hit — empty name included — reproduces the old scan's return on the first matching prof.uids[i].
+  auto exact = g_uid_name.find(uid);
+  if (exact != g_uid_name.end()) return exact->second;
+  // No exact match: a secondary-user caller carries uid = user * kPerUserRange + app_id and shares
+  // its package with the primary-user entry of the same app id, so match on app id to name it rather
   // than log a bare uid (a Private-space app forwards here as e.g. 1010156 for app id 10156). The
   // name carries the user as "pkg@<user>" to mark it a cross-user instance, not a configured
   // target. Log line only; routing keys off the exact uid, so it never widens a profile's scope.
-  const int32_t app_id = uid % 100000;
-  for (const auto& prof : g_profiles) {
-    for (size_t i = 0; i < prof.uids.size() && i < prof.uid_names.size(); ++i) {
-      if (prof.uids[i] % 100000 == app_id && !prof.uid_names[i].empty()) {
-        return prof.uid_names[i] + "@" + std::to_string(uid / 100000);
-      }
-    }
+  // g_appid_name seeds only named uids, in the same profile-by-profile order, so first-name-wins is
+  // preserved.
+  auto by_app = g_appid_name.find(uid % kPerUserRange);
+  if (by_app != g_appid_name.end() && !by_app->second.empty()) {
+    return by_app->second + "@" + std::to_string(uid / kPerUserRange);
   }
   return std::string();
 }
@@ -1649,6 +1692,9 @@ extern "C" int teesim_cfg_commit(uint64_t /*epoch*/, char* /*err*/, size_t /*err
     g_profiles = std::move(g_staging);
     g_staging.clear();
     g_strongbox_ok = g_stage_strongbox_ok;
+    // Rebuild the routing indices in lockstep with the swap, so every reader below sees g_profiles
+    // and its indices as one consistent snapshot.
+    RebuildIndex();
     n = static_cast<int>(g_profiles.size());
   }
   // Release anything parked in WaitForDefaultTa now that there is a TA to serve it.
@@ -1662,12 +1708,9 @@ extern "C" int teesim_cfg_commit(uint64_t /*epoch*/, char* /*err*/, size_t /*err
 extern "C" bool teesim_is_target_uid(int32_t uid) {
   if (uid < 0) return false;
   std::lock_guard<std::mutex> lk(g_cfg_mu);
-  for (const auto& prof : g_profiles) {
-    for (int32_t u : prof.uids) {
-      if (u == uid) return true;
-    }
-  }
-  return false;
+  // g_uid_index holds every configured target uid, so membership is one hash probe rather than a
+  // walk of every profile's uid list on each RKP gate check.
+  return g_uid_index.find(uid) != g_uid_index.end();
 }
 
 extern "C" bool teesim_cfg_resign(const char* profile_id, const uint8_t* leaf, size_t leaf_len,

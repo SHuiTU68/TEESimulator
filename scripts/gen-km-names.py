@@ -78,7 +78,12 @@ def s32(v):
 
 def main():
     TAG_TYPES.update(members("TagType"))
-    tags = [(n, v) for n, v in members("Tag") if v != 0]
+    # Sorted by the low 28 bits (the tag's numeric field, type nibble masked off). The C++ reader
+    # binary-searches kTags over that field, so the order must be explicit rather than inheriting the
+    # AIDL's declaration order.
+    tags = sorted(
+        ((n, v) for n, v in members("Tag") if v != 0), key=lambda t: t[1] & 0x0FFFFFFF
+    )
     enums = {e: members(e) for e in ENUMS}
     errors = members("ErrorCode")
 

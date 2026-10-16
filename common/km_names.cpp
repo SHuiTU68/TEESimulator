@@ -33,12 +33,41 @@ struct KmTagEntry {
 #include "km_names_gen.inc"
 
 constexpr uint32_t kTypeMask = 0xf0000000u;
+// The complement of kTypeMask: the tag's type-independent numeric field, which is what kTags is
+// sorted by (and what FindTag binary-searches).
+constexpr uint32_t kTypeLowMask = ~kTypeMask;
 constexpr uint32_t kTypeDate = 6u << 28;
 constexpr uint32_t kUserAuthType = 0x100001f8u;  // TagType.ENUM | 504
 
+// kTags is emitted sorted by each tag's low 28 bits — the numeric field, with the tag-TYPE nibble
+// (bits 28..31) masked off — and those keys are unique, so the lookup is a binary search over that
+// field confirmed by a full-tag compare, rather than a linear walk of all 60-odd entries. The
+// static_assert fails the build if a regeneration ever breaks the ordering, so the search can never
+// silently start missing tags.
+constexpr bool TagsSortedByLowField() {
+  for (size_t i = 1; i < sizeof(kTags) / sizeof(kTags[0]); ++i) {
+    if ((kTags[i].tag & kTypeLowMask) <= (kTags[i - 1].tag & kTypeLowMask)) return false;
+  }
+  return true;
+}
+static_assert(TagsSortedByLowField(), "kTags must be strictly ascending by low 28 bits for FindTag");
+
 const KmTagEntry *FindTag(uint32_t tag) {
-  for (const auto &t : kTags) {
-    if (t.tag == tag) return &t;
+  const uint32_t key = tag & kTypeLowMask;
+  size_t lo = 0;
+  size_t hi = sizeof(kTags) / sizeof(kTags[0]);
+  while (lo < hi) {
+    const size_t mid = lo + (hi - lo) / 2;
+    const uint32_t mid_key = kTags[mid].tag & kTypeLowMask;
+    if (mid_key < key) {
+      lo = mid + 1;
+    } else if (mid_key > key) {
+      hi = mid;
+    } else {
+      // Same low 28 bits: a full-tag match means the type nibble agrees too. A known number carrying
+      // an unknown type nibble is not a known tag and must still miss.
+      return kTags[mid].tag == tag ? &kTags[mid] : nullptr;
+    }
   }
   return nullptr;
 }

@@ -75,7 +75,11 @@ export function create(mount) {
   let scopePullBound = false; // pull-to-refresh listeners attached to scopeHost yet?
 
   function revalidate() {
-    errors = validateConfig(config).errors;
+    // Hand the validator the keybox files that actually exist, so a profile naming a keybox that was
+    // never imported (or was removed) is caught at Save rather than written and rejected at the next
+    // push. `keyboxFiles` is populated before the first revalidate (load/listKeyboxes) and refreshed
+    // on every tab activation and rescan.
+    errors = validateConfig(config, keyboxFiles).errors;
   }
 
   // A label/installed index over the cached device app list, handed to the editor so a scope

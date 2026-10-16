@@ -49,48 +49,81 @@ case "$pin" in
     ;;
 esac
 
-# --- system-property hiding (hide_props.conf) --------------------------------
-# Per-property control over the boot-state properties the daemon reconciles on every push. One entry
-# per line: a bare property name DELETES it, "name=value" OVERRIDES it. A '#' starts a comment that
-# runs to the end of the line, and whitespace is insignificant. A property that is not listed is
-# still synced to the value derived from the locked/Verified boot state we attest — the list only
-# ever takes a property away or pins it.
+# resetprop is the manager's binary; MAGISK, KernelSU and APatch each keep it somewhere different.
+# Resolved once, up front, because both the global boot-state pin below and the hide_props.conf
+# overrides after it need it.
+RP=""
+for c in /system_ext/bin/resetprop /system/bin/resetprop /data/adb/ksu/bin/resetprop /data/adb/magisk/resetprop; do
+  if [ -x "$c" ]; then
+    RP=$c
+    break
+  fi
+done
+[ -n "$RP" ] || RP=$(command -v resetprop 2>/dev/null)
+
+# --- global boot-state pin ---------------------------------------------------
+# The boot-state properties a locked, Verified device exposes, pinned GLOBALLY at boot — not gated on
+# the daemon, a config, or which apps are selected. An integrity check made before (or without) the
+# daemon already sees the locked/Verified face, rather than the unlocked state this hardware really
+# is. These mirror Harvester.bootStatePropValues() value for value; the daemon re-applies the same on
+# every push (idempotent), so the two never disagree:
+#
+#   ro.boot.flash.locked                 = 1
+#   ro.boot.verifiedbootstate            = green
+#   vendor.boot.verifiedbootstate        = green
+#   ro.boot.vbmeta.device_state          = locked
+#   vendor.boot.vbmeta.device_state      = locked
+#   sys.oem_unlock_allowed               = 0, or DELETED on Android 16+
+#
+# On Android 16+ (SDK 36) ANY value of sys.oem_unlock_allowed — including 0 — counts as an
+# OEM-unlock signal, so the property has to stop existing; below that the app-observable 0 is what
+# matters. A hide_props.conf line naming one of these still wins: the overrides are applied after
+# this block, exactly the precedence App.applyBootProps gives the file.
+if [ -n "$RP" ]; then
+  "$RP" -n ro.boot.flash.locked 1 >/dev/null 2>&1
+  "$RP" -n ro.boot.verifiedbootstate green >/dev/null 2>&1
+  "$RP" -n vendor.boot.verifiedbootstate green >/dev/null 2>&1
+  "$RP" -n ro.boot.vbmeta.device_state locked >/dev/null 2>&1
+  "$RP" -n vendor.boot.vbmeta.device_state locked >/dev/null 2>&1
+  sdk=$(getprop ro.build.version.sdk)
+  case "$sdk" in '' | *[!0-9]*) sdk=0 ;; esac
+  if [ "$sdk" -ge 36 ]; then
+    "$RP" -d sys.oem_unlock_allowed >/dev/null 2>&1
+  else
+    "$RP" -n sys.oem_unlock_allowed 0 >/dev/null 2>&1
+  fi
+fi
+
+# --- system-property overrides (hide_props.conf) ------------------------------
+# Per-property control over the boot-state properties. One entry per line: a bare property name
+# DELETES it, "name=value" OVERRIDES it. A '#' starts a comment that runs to the end of the line, and
+# whitespace is insignificant. A property that is not listed is still pinned to the derived value
+# above — the list only ever takes a property away or pins it.
 #
 # The daemon honours the same file, line for line (HideProps.kt), so an edit made in the WebUI is
 # picked up on the next push without a reboot; this copy is here so the list also applies when the
 # daemon never gets to run. Both read the one file, so the two can never disagree. Silent when absent.
 HIDE_PROPS=/data/adb/teesim/hide_props.conf
-if [ -f "$HIDE_PROPS" ]; then
-  # resetprop is the manager's binary; MAGISK, KernelSU and APatch each keep it somewhere different.
-  RP=""
-  for c in /system_ext/bin/resetprop /system/bin/resetprop /data/adb/ksu/bin/resetprop /data/adb/magisk/resetprop; do
-    if [ -x "$c" ]; then
-      RP=$c
-      break
-    fi
-  done
-  [ -n "$RP" ] || RP=$(command -v resetprop 2>/dev/null)
-  if [ -n "$RP" ]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-      line=${line%%#*}
-      # Whitespace is insignificant, so "ro.boot.flash.locked = 1" reads like "ro.boot.flash.locked=1".
-      line=$(printf '%s' "$line" | tr -d '[:space:]')
-      [ -n "$line" ] || continue
-      case "$line" in
-        *=*)
-          # A half-written line ("=1", "prop=") pins nothing and hides nothing, so skip it rather
-          # than write an empty value.
-          name=${line%%=*}
-          value=${line#*=}
-          [ -n "$name" ] && [ -n "$value" ] || continue
-          "$RP" -n "$name" "$value" >/dev/null 2>&1
-          ;;
-        *)
-          "$RP" -d "$line" >/dev/null 2>&1
-          ;;
-      esac
-    done < "$HIDE_PROPS"
-  fi
+if [ -f "$HIDE_PROPS" ] && [ -n "$RP" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%%#*}
+    # Whitespace is insignificant, so "ro.boot.flash.locked = 1" reads like "ro.boot.flash.locked=1".
+    line=$(printf '%s' "$line" | tr -d '[:space:]')
+    [ -n "$line" ] || continue
+    case "$line" in
+      *=*)
+        # A half-written line ("=1", "prop=") pins nothing and hides nothing, so skip it rather
+        # than write an empty value.
+        name=${line%%=*}
+        value=${line#*=}
+        [ -n "$name" ] && [ -n "$value" ] || continue
+        "$RP" -n "$name" "$value" >/dev/null 2>&1
+        ;;
+      *)
+        "$RP" -d "$line" >/dev/null 2>&1
+        ;;
+    esac
+  done < "$HIDE_PROPS"
 fi
 
 while true; do

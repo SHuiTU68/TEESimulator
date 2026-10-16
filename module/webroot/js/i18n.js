@@ -617,6 +617,7 @@ const RULES = [
   ],
   [/^Only one profile may auto-include new apps; (\d+) do\.$/, "只允许一个配置文件自动包含新应用；目前有 $1 个。"],
   [/^(.+) is not valid JSON: (.*)$/, "$1 不是合法的 JSON：$2"],
+  [/^Keybox (.*) is not in \/data\/adb\/teesim — import it first\.$/, "密钥盒 $1 不在 /data/adb/teesim —— 请先导入。"],
 
   // ---- config editor composition ----
   [/^harvested → (.*)$/, "已采集 → $1"],

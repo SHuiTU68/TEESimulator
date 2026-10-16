@@ -68,10 +68,16 @@ export function validateProfile(name, profile) {
   return errors;
 }
 
-// Validate the whole config, including the one rule no single profile can see:
-// a package may appear in at most one profile (routing is package -> one profile).
+// Validate the whole config, including the rules no single profile can see: a package may appear
+// in at most one profile (routing is package -> one profile), and — when the caller hands in the
+// keybox files actually present — that each profile's keybox points at a file that exists.
 // Returns { ok, errors: [{ profile, field, msg }] }.
-export function validateConfig(config) {
+//
+// `presentKeyboxes` is the list of *.xml basenames under /data/adb/teesim, or omitted/undefined when
+// the caller cannot enumerate them (then the existence rule simply does not apply). It is a separate
+// argument rather than a field on `config` because the field is a disk fact the validator cannot
+// derive from the config object alone.
+export function validateConfig(config, presentKeyboxes) {
   const errors = [];
 
   if (!config || typeof config !== "object" || Array.isArray(config)) {
@@ -86,10 +92,20 @@ export function validateConfig(config) {
     return { ok: errors.length === 0, errors };
   }
 
-  // Per-profile checks.
+  // Per-profile checks. A keybox that is named but not on disk is a hard error here too: the daemon
+  // would skip that profile (or refuse the whole config when it is the only one) and surface it as an
+  // opaque "no valid config to push", so blocking Save with the import hinted is strictly clearer.
+  const present = Array.isArray(presentKeyboxes) ? new Set(presentKeyboxes) : null;
   for (const name of Object.keys(profiles)) {
     for (const e of validateProfile(name, profiles[name])) {
       errors.push({ profile: name, field: e.field, msg: e.msg });
+    }
+    const kb = profiles[name] && profiles[name].keybox;
+    if (present && typeof kb === "string" && KEYBOX_RE.test(kb) && !present.has(kb)) {
+      errors.push({
+        profile: name, field: "keybox",
+        msg: `Keybox ${kb} is not in /data/adb/teesim — import it first.`,
+      });
     }
   }
 

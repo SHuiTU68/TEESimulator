@@ -86,8 +86,19 @@ object ConfigStore {
             val keybox = p.optString("keybox", "").trim()
             if (keybox.isEmpty()) throw ConfigException("profile '$id' has no keybox")
             val keyboxFile = File(Const.DATA_DIR, keybox)
-            if (!keyboxFile.isFile)
-                throw ConfigException("profile '$id' keybox not found: ${keyboxFile.absolutePath}")
+            if (!keyboxFile.isFile) {
+                // A keybox that was never imported (or was deleted) makes this ONE profile
+                // unusable: its push would carry a path the TA cannot open. Throwing here (as this
+                // used to) took the WHOLE config down with it, left lastGoodConfig empty, and showed
+                // up as an unexplained "no valid config to push" with nothing routing at all. Skip
+                // just this profile instead — the others still resolve and push, and importing the
+                // missing keybox later trips the DATA_DIR watcher, which reloads and re-activates it.
+                SystemLogger.warning(
+                    "ConfigStore: skipping profile '$id' — keybox not present at " +
+                        "${keyboxFile.absolutePath} (import it to activate this profile)"
+                )
+                continue
+            }
 
             // Operation mode: patch (re-sign the real hardware attestation) or generation (mint the
             // whole key). Defaults to patch; a level whose hardware is unavailable still falls back
@@ -192,16 +203,24 @@ object ConfigStore {
                 )
             )
         }
+        if (profiles.isEmpty())
+            throw ConfigException(
+                "no profile has a usable keybox under ${Const.DATA_DIR} " +
+                    "(import the keybox each profile names)"
+            )
         return Config(version, profiles)
     }
 
     private var observer: FileObserver? = null
 
     /**
-     * Watch the data dir for config.json / hide_props.conf / keybox changes and invoke [onChange].
-     * Uses the directory-level FileObserver (editors write via a temp file + rename). hide_props.conf
-     * is on the list so that saving it from the WebUI re-runs the boot-property reconciliation
-     * immediately, rather than waiting for the next boot.
+     * Watch the data dir for config.json / overrides.json / hide_props.conf / keybox changes and
+     * invoke [onChange]. Uses the directory-level FileObserver (editors write via a temp file +
+     * rename). hide_props.conf is on the list so that saving it from the WebUI re-runs the
+     * boot-property reconciliation immediately, rather than waiting for the next boot, and
+     * overrides.json is on it so an override edit (serial/imei/boot key, say) re-merges and re-pushes
+     * through the same path — without it, a WebUI override edit silently waited for the next boot or
+     * rescan to take effect.
      */
     fun watch(onChange: () -> Unit) {
         File(Const.DATA_DIR).mkdirs()
@@ -210,7 +229,11 @@ object ConfigStore {
             object : FileObserver(File(Const.DATA_DIR), mask) {
                 override fun onEvent(event: Int, path: String?) {
                     path ?: return
-                    if (path == "config.json" || path == "hide_props.conf" || path.endsWith(".xml")) {
+                    if (path == "config.json" ||
+                            path == "overrides.json" ||
+                            path == "hide_props.conf" ||
+                            path.endsWith(".xml")
+                    ) {
                         SystemLogger.info("ConfigStore: change detected in $path")
                         onChange()
                     }
