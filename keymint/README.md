@@ -26,12 +26,14 @@ Two tests gate a call. `IsHandled(code)` matches the transaction codes we simula
 `10` begin, `13` convertStorageKeyToEphemeral, `14` getKeyCharacteristics. (These are
 the [AIDL method ordinals](https://cs.android.com/android/platform/superproject/main/+/main:hardware/interfaces/security/keymint/aidl/android/hardware/security/keymint/IKeyMintDevice.aidl),
 matching the method declaration order in `IKeyMintDevice.aidl`; the AIDL compiler numbers methods from `1` after the
-reserved metadata slots.) `IsKeyMintProxy(binder)` confirms the target is actually
+reserved metadata slots.) `IsKeyMintProxy(desc, binder)` confirms the target is actually
 the KeyMint proxy and not some other service sharing the `AIBinder_transact` call
 site: it compares the binder's class descriptor against `IKeyMintDevice::descriptor`
 (it does **not** require `AIBinder_isRemote`). The descriptor is the interface's
 fully-qualified name string, stamped on every binder of that type, so it's a reliable
-identity check.
+identity check. `HookedTransact` resolves that descriptor once per transaction and
+hands the same bytes to both gates — this one and the RKP check — rather than each
+paying its own `AIBinder_getClass` lookup.
 
 We match a *local* `IKeyMintDevice` too, which is why the check does not require
 `AIBinder_isRemote`. On a legacy Keymaster (`keymaster@4.x`) backend `keystore2` has no

@@ -24,6 +24,15 @@ class Injector(private val moduleDir: File) {
     @Volatile private var running = false
     @Volatile private var lastPid = -1
 
+    // Watcher cadence. The fast poll is only needed while we are still trying to (re)inject, or
+    // shortly after a restart; once the injected keystore has been seen alive and unchanged for a
+    // few ticks, the only thing that can change the answer is a keystore restart, and noticing that a
+    // couple of seconds later still re-covers it well before a target app is likely to ask for a key.
+    // So the always-on watcher settles to POLL_MAX_MS, cutting its wakeups several-fold at idle.
+    private val pollFastMs = 2_000L
+    private val pollSlowMs = 6_000L
+    private val pollSlowAfterTicks = 3
+
     fun start() {
         if (running) return
         running = true
@@ -43,6 +52,7 @@ class Injector(private val moduleDir: File) {
     private fun loop() {
         SystemLogger.info("Injector: watching $procName (abi=$abi lib=$libName)")
         var failures = 0
+        var steadyTicks = 0
         while (running) {
             // The full /proc walk in findPid touches every process's cmdline (~1000 reads on a
             // busy device); skip it while the pid we last injected is still alive, since it never
@@ -76,8 +86,18 @@ class Injector(private val moduleDir: File) {
             } else if (pid <= 0) {
                 lastPid = -1 // process gone; force re-inject when it returns
             }
-            // Back off when injection keeps failing so we don't hammer a wedged keystore.
-            sleep(if (failures > 3) 10000 else 2000)
+            // Steady means the injected process is up and unchanged: only then does the interval
+            // creep toward the slow cadence. Any restart, retry or failure resets it to the fast one,
+            // and a long run of failures backs off further so we don't hammer a wedged keystore.
+            val steady = pid > 0 && pid == lastPid
+            steadyTicks = if (steady) steadyTicks + 1 else 0
+            sleep(
+                when {
+                    failures > 3 -> 10_000L
+                    steadyTicks >= pollSlowAfterTicks -> pollSlowMs
+                    else -> pollFastMs
+                }
+            )
         }
     }
 

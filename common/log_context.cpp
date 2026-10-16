@@ -15,14 +15,36 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
+
+#include "logging.hpp"
 
 namespace {
 // A std::string rather than a borrowed pointer: the caller's context is built per request and must
 // stay readable for the whole call, including from Rust, after the builder has gone out of scope.
 thread_local std::string g_ctx;
+// The contexts LogContext has replaced on this thread, innermost last. Moving a context in and out
+// of here is what lets one already-built (and often heap-backed) string be adopted instead of
+// copied twice; a std::string member's buffer is reused across the nested push/pop.
+thread_local std::vector<std::string> g_ctx_stack;
 }  // namespace
 
 extern "C" const char* teesim_log_context(void) { return g_ctx.c_str(); }
+
+// Adopt a freshly built request context, stashing the one it replaces so LogContext's destructor can
+// put it back. Taking the string by value and moving is the point: the caller's temporary is handed
+// over without the extra copy teesim_log_set_context (assign from a `const char*`) used to make.
+void teesim_log_context_push(std::string ctx) {
+  g_ctx_stack.push_back(std::move(g_ctx));
+  g_ctx = std::move(ctx);
+}
+
+void teesim_log_context_pop(void) {
+  if (g_ctx_stack.empty()) return;  // unbalanced pop (a LogContext outliving its thread state)
+  g_ctx = std::move(g_ctx_stack.back());
+  g_ctx_stack.pop_back();
+}
 
 // A short serial naming ONE request, minted at each hooked entry point and carried on every line
 // that request produces, in both languages.
@@ -35,8 +57,6 @@ extern "C" unsigned teesim_log_new_rid(void) {
   static std::atomic<unsigned> next{0};
   return next.fetch_add(1, std::memory_order_relaxed) & 0xffffu;
 }
-
-extern "C" void teesim_log_set_context(const char* ctx) { g_ctx.assign(ctx ? ctx : ""); }
 
 // --- The emitter -------------------------------------------------------------
 //

@@ -24,6 +24,7 @@ use x509_cert::der::asn1::{BitString, ObjectIdentifier, OctetString};
 use x509_cert::der::{Decode, Encode};
 use x509_cert::spki::AlgorithmIdentifierOwned;
 use x509_cert::Certificate;
+use x509_cert::certificate::TbsCertificate;
 
 /// Local (non-TA) failure code, matching `ops::ERR_UNKNOWN`.
 const ERR: i32 = -1000;
@@ -35,18 +36,31 @@ const ERR: i32 = -1000;
 /// identical lines. Both fields are already parsed into `tbs_certificate`, so they cost nothing.
 pub(crate) fn describe_cert(der: &[u8]) -> String {
     match Certificate::from_der(der) {
-        Ok(c) => {
-            let spki = c.tbs_certificate.subject_public_key_info.subject_public_key.raw_bytes();
-            format!(
-                "serial={} spki={} subject=[{}] issuer=[{}]",
-                short_hex(c.tbs_certificate.serial_number.as_bytes()),
-                short_hex(spki),
-                c.tbs_certificate.subject,
-                c.tbs_certificate.issuer
-            )
-        }
+        Ok(c) => describe_tbs(&c.tbs_certificate),
         Err(e) => format!("<unparseable {}-byte cert: {e}>", der.len()),
     }
+}
+
+/// The same description from an already-parsed certificate, for a caller that must parse the DER for
+/// other reasons anyway (`patch_attestation`): parsing it a second time just for the log was pure
+/// repeated work.
+pub(crate) fn describe_parsed(c: &Certificate) -> String {
+    describe_tbs(&c.tbs_certificate)
+}
+
+/// The description from a parsed `tbsCertificate` alone. Every field `describe_cert` reports — the
+/// serial, the subject public key, the subject and the issuer — lives here, so a caller holding only
+/// the tbs (the patched leaf, before it is wrapped and encoded) can describe it without re-encoding
+/// and re-parsing the certificate it is about to produce.
+fn describe_tbs(tbs: &TbsCertificate) -> String {
+    let spki = tbs.subject_public_key_info.subject_public_key.raw_bytes();
+    format!(
+        "serial={} spki={} subject=[{}] issuer=[{}]",
+        short_hex(tbs.serial_number.as_bytes()),
+        short_hex(spki),
+        tbs.subject,
+        tbs.issuer
+    )
 }
 
 /// 64-bit FNV-1a, for naming a keybox in the log without printing any of it.
@@ -110,19 +124,20 @@ impl Ta {
     /// Re-sign a real hardware attestation `leaf` (DER) under the keybox with the profile's root of
     /// trust. Returns the new chain `[patched leaf, keybox chain…]`.
     pub fn patch_attestation(&self, leaf: &[u8]) -> Result<Vec<Vec<u8>>, OpError> {
-        log::debug!("patch_attestation: input leaf {}", describe_cert(leaf));
+        // Parse the real leaf once, and describe it from the parsed form: the debug line and the parse
+        // used to each walk the same DER.
         let cert = Certificate::from_der(leaf).map_err(wrap("parse real leaf"))?;
+        log::debug!("patch_attestation: input leaf {}", describe_parsed(&cert));
         let mut tbs = cert.tbs_certificate;
 
         // Sign with the keybox key matching the attested key's algorithm; batch() falls back to the
         // keybox's other key when that algorithm is absent (an EC-only RKP keybox signs every leaf
         // with its EC key) and reports which key it returned, so `is_ec` here is the signing key's
-        // algorithm — what the signature fields must describe, not the attested key's.
+        // algorithm — what the signature fields must describe, not the attested key's. It hands back
+        // the chain's already-parsed leaf too, so re-rooting under its subject costs no per-call DER
+        // parse of a keybox certificate that never changes.
         let want_ec = tbs.subject_public_key_info.algorithm.oid == ID_EC_PUBLIC_KEY;
-        let (batch_key, batch_chain, is_ec) = self.sign_info.batch(want_ec);
-        let batch_leaf = batch_chain.first().ok_or_else(|| err("keybox chain is empty"))?;
-        let batch_leaf =
-            Certificate::from_der(&batch_leaf.encoded_certificate).map_err(wrap("parse keybox leaf"))?;
+        let (batch_key, batch_chain, is_ec, batch_leaf) = self.sign_info.batch(want_ec);
 
         let sig_alg = AlgorithmIdentifierOwned {
             oid: if is_ec { EC_SHA256_SIG_OID } else { RSA_SHA256_SIG_OID },
@@ -151,6 +166,10 @@ impl Ta {
         // Re-root the leaf at the keybox and re-sign the modified tbsCertificate.
         tbs.signature = sig_alg.clone();
         tbs.issuer = batch_leaf.tbs_certificate.subject.clone();
+        // Describe the patched leaf from the tbs in hand, before it is moved into the certificate
+        // below and encoded — the encoded form is the only thing a later `describe_cert` could read,
+        // and re-deriving it would parse the certificate this line is about.
+        let patched_leaf_desc = describe_tbs(&tbs);
         let tbs_der = tbs.to_der().map_err(wrap("encode tbsCertificate"))?;
         let sig = self.sign_tbs(is_ec, batch_key, &tbs_der)?;
 
@@ -171,7 +190,7 @@ impl Ta {
         log::debug!(
             "patch_attestation: {} cert(s), leaf {} signed by keybox {} batch serial={}",
             chain.len(),
-            describe_cert(&chain[0]),
+            patched_leaf_desc,
             if is_ec { "EC" } else { "RSA" },
             short_hex(batch_leaf.tbs_certificate.serial_number.as_bytes())
         );

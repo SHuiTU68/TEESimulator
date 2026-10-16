@@ -19,7 +19,6 @@ extern "C" {
 #endif
 // Never null; "" when no request is in scope. Valid until this thread sets a new one.
 const char *teesim_log_context(void);
-void teesim_log_set_context(const char *ctx);
 // The ErrorCode name for a KeyMint status, or "?" for a code outside the AIDL. Never null, so it can
 // be passed straight to a %s. Defined alongside the context in common/log_context.cpp.
 const char *teesim_km_err_name(int32_t code);
@@ -62,20 +61,26 @@ unsigned teesim_log_new_rid(void);
 
 #ifdef __cplusplus
 #include <string>
+#include <utility>
 
-// Stamps the caller this thread is serving onto every line it logs, and clears it on the way out.
-// Nesting is not expected (one binder call per thread at a time), so the destructor restores the
-// context that was in scope on entry rather than blindly clearing it.
+// Set this thread's request context, moving `ctx` in rather than copying it, and stash the context
+// it replaces on a per-thread stack (see LogContext). Defined in common/log_context.cpp beside the
+// thread-local they manipulate.
+void teesim_log_context_push(std::string ctx);
+void teesim_log_context_pop(void);
+
+// Stamps the caller this thread is serving onto every line it logs, and restores the previous one on
+// the way out. The context is moved in, so a freshly built context (RequestCtx()) costs a single
+// string rather than the copy the old set-by-pointer version made; an existing member is still
+// copied by the by-value parameter, which is unavoidable and rare.
+//
+// Nesting is not expected (one binder call per thread at a time), but the push/pop pair keeps it
+// correct: the destructor restores whatever context was in scope on entry.
 class LogContext {
   public:
-    explicit LogContext(const std::string &ctx) : saved_(teesim_log_context()) {
-        teesim_log_set_context(ctx.c_str());
-    }
-    ~LogContext() { teesim_log_set_context(saved_.c_str()); }
+    explicit LogContext(std::string ctx) { teesim_log_context_push(std::move(ctx)); }
+    ~LogContext() { teesim_log_context_pop(); }
     LogContext(const LogContext &) = delete;
     LogContext &operator=(const LogContext &) = delete;
-
-  private:
-    std::string saved_;
 };
 #endif

@@ -14,12 +14,18 @@ use kmr_common::{
 use kmr_ta::device::{RetrieveCertSigningInfo, SigningAlgorithm, SigningKeyType};
 use kmr_wire::keymint::{self, EcCurve};
 use roxmltree::Document;
+use x509_cert::der::Decode;
+use x509_cert::Certificate;
 
 /// Per-algorithm signing key material plus its certificate chain.
 #[derive(Clone)]
 struct AlgoInfo {
     key: KeyMaterial,
     chain: Vec<keymint::Certificate>,
+    /// The chain's leaf, parsed once when the keybox is loaded. Patch mode re-roots a real leaf under
+    /// this certificate's subject and names its serial in the log; parsing it per attestation was
+    /// repeated work on an input that never changes.
+    batch_leaf: Certificate,
 }
 
 /// Signing information for the asymmetric key types we attest with. Each algorithm is optional; a
@@ -50,10 +56,14 @@ impl CertSignInfo {
     /// The batch signing key, its keybox certificate chain, and whether that key is EC. `prefer_ec`
     /// requests the algorithm matching the key being attested; when absent, the other key is used
     /// (an EC-only RKP keybox signs every leaf with its EC key). Patch mode re-signs a real
-    /// attestation leaf with this key and appends this chain.
-    pub fn batch(&self, prefer_ec: bool) -> (KeyMaterial, &[keymint::Certificate], bool) {
+    /// attestation leaf with this key, re-roots it under the returned leaf's subject and appends this
+    /// chain.
+    pub fn batch(
+        &self,
+        prefer_ec: bool,
+    ) -> (KeyMaterial, &[keymint::Certificate], bool, &Certificate) {
         let (a, is_ec) = self.pick(prefer_ec);
-        (a.key.clone(), &a.chain, is_ec)
+        (a.key.clone(), &a.chain, is_ec, &a.batch_leaf)
     }
 }
 
@@ -132,7 +142,12 @@ fn parse_algo(node: roxmltree::Node, algo: SigningAlgorithm) -> Result<AlgoInfo,
             KeyMaterial::Ec(EcCurve::P256, CurveType::Nist, ec::Key::P256(ec::NistKey(key_der)).into())
         }
     };
-    Ok(AlgoInfo { key, chain })
+    // Parse the chain's leaf once here, at load, so patch mode never parses it per attestation. The
+    // keybox is the module's own configured input, so a leaf that will not parse is a configuration
+    // error worth failing the whole TA build on rather than a transient per-call failure.
+    let batch_leaf = Certificate::from_der(&chain[0].encoded_certificate)
+        .map_err(|e| format!("{name}: keybox leaf: {e:?}"))?;
+    Ok(AlgoInfo { key, chain, batch_leaf })
 }
 
 /// Strip PEM armor and all whitespace, then base64-decode.

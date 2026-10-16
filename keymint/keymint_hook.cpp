@@ -73,20 +73,13 @@ bool IsOurDevice(AIBinder* binder) {
   return g_our_devices.count(binder) != 0;
 }
 
+// The transaction codes we handle, as a bitmask: bit `code` set means handled. A shift-and-test
+// keeps this a handful of instructions on the hot path, with no jump table to chase.
+//
+//   3 generateKey, 4 importKey, 5 importWrappedKey, 6 upgradeKey, 7 deleteKey,
+//   10 begin, 13 convertStorageKeyToEphemeral, 14 getKeyCharacteristics
 bool IsHandled(transaction_code_t code) {
-  switch (code) {
-    case 3:   // generateKey
-    case 4:   // importKey
-    case 5:   // importWrappedKey
-    case 6:   // upgradeKey
-    case 7:   // deleteKey
-    case 10:  // begin
-    case 13:  // convertStorageKeyToEphemeral
-    case 14:  // getKeyCharacteristics
-      return true;
-    default:
-      return false;
-  }
+  return code < 16 && ((0x64F8u >> code) & 1u) != 0;
 }
 
 // Identity check for the KeyMint binder keystore2 transacts. We match on the class descriptor alone
@@ -104,10 +97,11 @@ bool IsHandled(transaction_code_t code) {
 //
 // The descriptor also matches our own local TeesimKeyMintDevice, so we exclude it (IsOurDevice). The
 // descriptor is compared first, so the g_our_mu lookup runs only for actual IKeyMintDevice binders.
-bool IsKeyMintProxy(AIBinder* binder) {
-  const AIBinder_Class* clazz = AIBinder_getClass(binder);
-  if (!clazz) return false;
-  const char* desc = AIBinder_Class_getDescriptor(clazz);
+//
+// `desc` is the binder's class descriptor, already resolved by the caller: HookedTransact fetches it
+// once per transact and hands the same bytes to both gates here and in IsRkpProvisioning, instead of
+// each gate paying its own AIBinder_getClass lookup.
+bool IsKeyMintProxy(const char* desc, AIBinder* binder) {
   if (!desc || std::strcmp(desc, IKeyMintDevice::descriptor) != 0) return false;
   return !IsOurDevice(binder);
 }
@@ -135,12 +129,11 @@ uint64_t NowMonoMs() {
 // resolves it by calling IRemoteProvisioning.getRegistration on this binder; failing that transact
 // makes keystore2 fall back to "no attest key" (get_attest_key_info -> Ok(None)) on a hybrid device,
 // so it appends no real-hardware certificate chain to the key we mint.
-bool IsRkpProvisioning(AIBinder* binder) {
-  if (!AIBinder_isRemote(binder)) return false;
-  const AIBinder_Class* clazz = AIBinder_getClass(binder);
-  if (!clazz) return false;
-  const char* desc = AIBinder_Class_getDescriptor(clazz);
-  return desc && std::strcmp(desc, "android.security.rkp.IRemoteProvisioning") == 0;
+//
+// `desc` is the class descriptor HookedTransact already resolved (see IsKeyMintProxy).
+bool IsRkpProvisioning(const char* desc, AIBinder* binder) {
+  if (!desc || !AIBinder_isRemote(binder)) return false;
+  return std::strcmp(desc, "android.security.rkp.IRemoteProvisioning") == 0;
 }
 
 // Read a security level's rkp_only property. Fills `raw` with the property's current value (empty
@@ -262,13 +255,19 @@ binder_status_t Redirect(AIBinder* local, transaction_code_t code, AParcel** in,
 binder_status_t HookedTransact(AIBinder* binder, transaction_code_t code, AParcel** in,
                                AParcel** out, binder_flags_t flags) {
   if (!tls_forwarding && in && *in) {
+    // Resolve the binder's class descriptor once and hand the same bytes to both gates below. Each
+    // gate used to fetch it independently, so every transact that reached them paid two
+    // AIBinder_getClass lookups over the same object. A binder with no class (a plain BpBinder, say)
+    // yields the null descriptor, which both gates treat as "not ours".
+    const AIBinder_Class* clazz = AIBinder_getClass(binder);
+    const char* desc = clazz ? AIBinder_Class_getDescriptor(clazz) : nullptr;
     // Deny a target app's remote-provisioning lookup so keystore2 attaches no real attest key. The
     // RKP resolution runs on this same binder thread (a current-thread tokio runtime block_on), while
     // keystore2 is still serving the app's generateKey, so getCallingUid is the app's uid. The gate is
     // per security level: keystore2 reads .tee.rkp_only for a TE request and .strongbox.rkp_only for a
     // StrongBox one, and denying an rkp-only level fails the key instead of falling back — so pick the
     // property matching this getRegistration's target (its irpcName) rather than the TEE one alone.
-    if (IsRkpProvisioning(binder)) {
+    if (IsRkpProvisioning(desc, binder)) {
       int32_t uid = static_cast<int32_t>(AIBinder_getCallingUid());
       // The gate runs on the app's binder thread but outside any hooked entry point, so it stamps
       // its own context; the rid it records ties the verdict back to the line that made it.
@@ -318,7 +317,7 @@ binder_status_t HookedTransact(AIBinder* binder, transaction_code_t code, AParce
         }
       }
     }
-    if (IsHandled(code) && IsKeyMintProxy(binder)) {
+    if (IsHandled(code) && IsKeyMintProxy(desc, binder)) {
       AIBinder* local = LocalFor(binder);
       if (local) return Redirect(local, code, in, out, flags, binder);
       // local == nullptr: a SOFTWARE-level proxy we deliberately do not wrap; fall through to
