@@ -12,7 +12,7 @@ import {
   splitEntry, entryToken,
 } from "../js/domain/schema.js";
 import { validateConfig, validateProfile } from "../js/domain/validate.js";
-import { ADB, DEFAULT_FUNCTIONS, hasAdb, withAdb, usbDebugState } from "../js/domain/usb.js";
+import { ON_FUNCTIONS, OFF_FUNCTIONS, functionsFor, hasAdb, usbDebugState } from "../js/domain/usb.js";
 import { PROP_NAME_RE, parseHideProps, summarize, suspiciousNames } from "../js/domain/hide-props.js";
 
 // A minimal profile that should pass: defaults from emptyProfile() + one app.
@@ -237,7 +237,8 @@ for (const [re, good, bad] of cases) {
 
 // --- USB-debugging pin ----------------------------------------------------
 // The rules behind the System screen's switch and module/service.sh's boot re-assertion: the
-// recorded choice (persist.teesim.usb_debug) and the device's USB function list are kept in step.
+// recorded choice (persist.teesim.usb_debug) maps to a fixed USB function list (mtp,adb on,
+// none off), and the switch state is read back from the record and that list.
 test("hasAdb reads a comma-separated function list", () => {
   assert.equal(hasAdb("mtp,adb"), true);
   assert.equal(hasAdb("adb"), true);
@@ -252,36 +253,19 @@ test("hasAdb reads a comma-separated function list", () => {
   assert.equal(hasAdb("adbfoo"), false);
 });
 
-test("withAdb adds and removes adb while preserving every other function", () => {
-  assert.equal(withAdb("mtp", true), "mtp,adb");
-  assert.equal(withAdb("mtp,adb", false), "mtp");
-  assert.equal(withAdb("ptp,rndis", true), "ptp,rndis,adb");
-  assert.equal(withAdb("ptp,rndis", false), "ptp,rndis");
+test("functionsFor maps the pin to a fixed USB function list", () => {
+  // On: file transfer + debugging. Off: charging only ("none"), never MTP — this is the value the
+  // WebUI writes and module/service.sh re-asserts at boot from the record alone.
+  assert.equal(ON_FUNCTIONS, "mtp,adb");
+  assert.equal(OFF_FUNCTIONS, "none");
+  assert.equal(functionsFor(true), ON_FUNCTIONS);
+  assert.equal(functionsFor(false), OFF_FUNCTIONS);
 });
 
-test("withAdb is idempotent and never duplicates adb", () => {
-  assert.equal(withAdb("mtp,adb", true), "mtp,adb");
-  assert.equal(withAdb("mtp", false), "mtp");
-  assert.equal(withAdb("mtp,adb,adb", true), "mtp,adb");
-  assert.equal(withAdb("mtp,adb,adb", false), "mtp");
-});
-
-test("withAdb never yields a bare debugging configuration", () => {
-  // Turning debugging off on a device whose only function is adb leaves it with MTP rather than
-  // with an empty function list, and turning it on from nothing yields MTP + adb.
-  assert.equal(withAdb("adb", false), DEFAULT_FUNCTIONS);
-  assert.equal(withAdb("", false), DEFAULT_FUNCTIONS);
-  assert.equal(withAdb("", true), DEFAULT_FUNCTIONS + "," + ADB);
-  assert.equal(hasAdb(withAdb("", false)), false);
-});
-
-test("withAdb round-trips a pin off and on again", () => {
-  for (const start of ["mtp", "mtp,adb", "ptp", "rndis,mtp,adb"]) {
-    const off = withAdb(start, false);
-    assert.equal(hasAdb(off), false, start);
-    assert.equal(hasAdb(withAdb(off, true)), true, start);
-    assert.equal(hasAdb(withAdb(withAdb(off, true), false)), false, start);
-  }
+test("functionsFor keeps the pin's promise about adb", () => {
+  // Turning the pin on always advertises adb; turning it off never does.
+  assert.equal(hasAdb(functionsFor(true)), true);
+  assert.equal(hasAdb(functionsFor(false)), false);
 });
 
 test("usbDebugState lets the record win over the function list", () => {

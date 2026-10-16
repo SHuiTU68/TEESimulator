@@ -4,7 +4,7 @@
 // is documented in domain/usb.js. Every write goes through bridge/shell.js, the quoting boundary.
 
 import { getProp, run, setProp } from "../bridge/shell.js";
-import { usbDebugState, withAdb } from "../domain/usb.js";
+import { functionsFor, usbDebugState } from "../domain/usb.js";
 
 // The module's record of the choice, and the device's persisted USB function list.
 export const USB_DEBUG_PROP = "persist.teesim.usb_debug";
@@ -41,14 +41,15 @@ export async function readUsbDebug() {
   }
 }
 
-// Flip the pin: record the choice, tell the framework, and keep the persisted function list in
-// step. The RECORD is what makes the choice survive a reboot (module/service.sh re-reads it), so it
-// is the one write whose failure is reported back — a failed record must not look like success.
+// Flip the pin: record the choice, tell the framework, and drive the persisted function list to the
+// value the record maps to (on -> mtp,adb, off -> none). The RECORD is what makes the choice survive
+// a reboot (module/service.sh re-reads it), so it is the one write whose failure is reported back — a
+// failed record must not look like success. The function list is written unconditionally rather than
+// only when it differs, because on a device whose list is unset the framework would otherwise fall
+// back to "mtp" at boot: writing it here and in module/service.sh is what keeps "off" off.
 export async function setUsbDebug(on) {
   const record = await setProp(USB_DEBUG_PROP, on ? "1" : "0");
-  const config = await currentFunctions();
   await run([...SETTINGS, on ? "1" : "0"]);
-  const next = withAdb(config, on);
-  if (next !== config) await setProp(USB_CONFIG_PROP, next);
+  await setProp(USB_CONFIG_PROP, functionsFor(on));
   return record.ok ? { ok: true } : { ok: false, error: record.error };
 }
