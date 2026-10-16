@@ -276,7 +276,13 @@ androidComponents {
                 // The module scripts and WebUI (service.sh, daemon, customize.sh, sepolicy.rule,
                 // config.default.json, webroot/); module.prop is templated separately below.
                 val sourceModuleDir = rootProject.projectDir.resolve("module")
-                from(sourceModuleDir) { exclude("module.prop") }
+                from(sourceModuleDir) {
+                    exclude("module.prop")
+                    // The WebUI's dev-only artifacts never ship. The unit tests and the i18n coverage
+                    // checker live beside the app but nothing reads them at runtime, so they are dropped
+                    // from the flashable zip — they stay in the repo for `node --test` and the checker.
+                    exclude("webroot/tests/**", "webroot/tools/**")
+                }
 
                 // module.prop with git-derived version fields filled in.
                 from(sourceModuleDir) {

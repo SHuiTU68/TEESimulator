@@ -498,6 +498,19 @@ const iconObserver =
       )
     : null;
 
+// A resolved app icon is memoized for the page session. The Scope list is rebuilt on every
+// keystroke, filter/sort tap and 9 s poll, and each rebuild re-creates every visible row — so
+// without this the same icons would be re-fetched over the root bridge (a helper spawn each) on
+// every rebuild. Only a successful data: URL is cached: a transient daemon failure also resolves
+// to null, and caching that would pin the avatar forever, so a null is retried on the next rebuild.
+const ICON_CACHE = new Map(); // "<pkg>@<userId>" -> data: URL
+const ICON_CACHE_MAX = 512; // bound the map for a device with a very large app list
+function rememberIcon(key, url) {
+  if (!url) return;
+  if (ICON_CACHE.size >= ICON_CACHE_MAX) ICON_CACHE.delete(ICON_CACHE.keys().next().value);
+  ICON_CACHE.set(key, url);
+}
+
 // The lazy app icon: a letter-avatar shows immediately (before, and instead of a missing/failed
 // icon); the real icon is fetched as a data: URL when the row scrolls into view and swapped in.
 function iconEl(row, primary, label, iconUrl) {
@@ -510,6 +523,9 @@ function iconEl(row, primary, label, iconUrl) {
   if (!pkg) return wrap;
   // The user rides along: an app that exists only in a work profile has no record in user 0 for the
   // daemon to read an icon out of. iconUrl now returns a Promise of a data: URL (or null).
+  const key = pkg + "@" + (row.userId || 0);
+  const cached = ICON_CACHE.get(key);
+  if (cached) { wrap.replaceChildren(iconImg(cached, avatar)); return wrap; } // settled: no fetch, no observe
   let loaded = false;
   const load = () => {
     if (loaded) return;
@@ -517,12 +533,8 @@ function iconEl(row, primary, label, iconUrl) {
     Promise.resolve(iconUrl(pkg, row.userId || 0))
       .then((url) => {
         if (!url) return; // no icon -> keep the avatar
-        const img = el("img", {
-          class: "scope-ico-img", decoding: "async", alt: "", src: url,
-          onerror: () => { if (img.parentNode) img.replaceWith(avatar()); },
-        });
-        const cur = wrap.firstChild;
-        if (cur) cur.replaceWith(img); else wrap.appendChild(img);
+        rememberIcon(key, url);
+        wrap.replaceChildren(iconImg(url, avatar));
       })
       .catch(() => { /* keep the avatar */ });
   };
@@ -530,6 +542,14 @@ function iconEl(row, primary, label, iconUrl) {
   if (iconObserver) iconObserver.observe(wrap);
   else load(); // no observer support: load eagerly
   return wrap;
+}
+
+// An <img> for a resolved icon; if it fails to render, it falls back to the letter-avatar.
+function iconImg(url, avatar) {
+  return el("img", {
+    class: "scope-ico-img", decoding: "async", alt: "", src: url,
+    onerror: (e) => { const img = e.target; if (img.parentNode) img.replaceWith(avatar()); },
+  });
 }
 
 // A compact frequency label: raw under 1k, else "1.2k" so a busy app's badge stays narrow.

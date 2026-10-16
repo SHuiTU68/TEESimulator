@@ -123,9 +123,6 @@ export function applyDocumentLang() {
 
 // --- missing-string diagnostics ----------------------------------------------
 const missing = new Set();
-export function missingStrings() {
-  return [...missing];
-}
 function noteMissing(s) {
   if (!debugOn() || missing.has(s)) return;
   // Only prose-looking strings; data (paths, ids, daemon text) is expected to stay verbatim.
@@ -203,6 +200,7 @@ export function applyStatic(root) {
 const ZH = {
   // ---- shared chrome / primitives -------------------------------------------
   "checking…": "检测中…",
+  "Loading…": "加载中…",
   running: "运行中",
   unreachable: "不可达",
   "Switch language": "切换语言",
@@ -326,6 +324,10 @@ const ZH = {
   "(no alias)": "（无别名）",
   Algorithm: "算法",
   Created: "创建时间",
+  // The key-row meta lines render "<label>: <value>", so the label carries a trailing ": ".
+  "Algorithm: ": "算法：",
+  "Keybox: ": "密钥盒：",
+  "Created: ": "创建时间：",
   Delegated: "已委托",
   Generated: "已生成",
   Patched: "已修补",
@@ -344,6 +346,8 @@ const ZH = {
   "No real keys to hide": "没有可隐藏的真实密钥",
   "Deleting…": "正在删除…",
   "Daemon key capability unavailable.": "守护进程的密钥能力不可用。",
+  "The daemon's admin endpoint isn't reachable yet; keys can't be listed.":
+    "守护进程的管理接口尚不可达；暂时无法列出密钥。",
   "Key listing is not available on this Android version.": "此 Android 版本不支持列出密钥。",
   "Filter — text, or tap a badge (class: app: purpose:)":
     "筛选 —— 输入文本，或点按徽标（class:、app:、purpose:）",
@@ -360,9 +364,12 @@ const ZH = {
   "Back to keyboxes": "返回密钥盒列表",
   "Import keybox": "导入密钥盒",
   "Keybox file": "密钥盒文件",
+  "no keybox files found": "未找到密钥盒文件",
   "Save as": "另存为",
   "Could not inspect this keybox.": "无法检查该密钥盒。",
   "Could not read that file.": "无法读取该文件。",
+  "The file is copied into /data/adb/teesim; the name field becomes its filename.":
+    "该文件会被复制到 /data/adb/teesim；名称字段会作为其文件名。",
   "No keyboxes yet. Import an *.xml keybox to sign attestations with.":
     "还没有密钥盒。导入一个 *.xml 密钥盒即可用于签署认证。",
   "AOSP root": "AOSP 根",
@@ -385,12 +392,29 @@ const ZH = {
     "该证书链中的某张证书已被列入 Google 吊销列表 —— 由它签署的认证会被 Play Integrity 拒绝。",
   "A certificate signature in this chain is invalid, so it is not a usable attestation chain.":
     "该证书链中某张证书的签名无效，因此这不是一条可用的认证链。",
+  // Chips and role labels rendered per key/cert in the inspect drill-in. Lowercase in source
+  // (they read as compact status tokens), so they are keyed verbatim.
+  "chain ok": "证书链正常",
+  "chain broken": "证书链断开",
+  "single cert": "单证书",
+  "private key": "含私钥",
+  "no private key": "无含私钥",
+  "bad signature": "签名无效",
+  expired: "已过期",
+  "not yet valid": "尚未生效",
+  leaf: "终端证书",
+  root: "根证书",
+  intermediate: "中间证书",
+  "no root": "无根",
+  "Rooted in the AOSP software test key — not a hardware-backed keybox; fails hardware attestation.":
+    "根植于 AOSP 软件测试密钥 —— 并非硬件支持的密钥盒，无法通过硬件认证。",
 
   // ---- logs -----------------------------------------------------------------
   "Filter logs": "筛选日志",
   "Save logs": "保存日志",
   "Reset filters": "重置筛选",
   "Message contains": "消息包含",
+  "substring in the message": "消息中的子串",
   "Minimum level": "最低级别",
   Tags: "标签",
   "No tags seen yet.": "尚未看到任何标签。",
@@ -404,6 +428,20 @@ const ZH = {
   "Daemon health": "守护进程健康状态",
   Daemon: "守护进程",
   Harvest: "采集",
+  // Health panel: the interceptor's three states, each a word next to a status dot.
+  active: "已启用",
+  inactive: "未启用",
+  "not attached": "未挂载",
+  // Harvest overrides: the badges that say how each fabricated value was obtained, plus the
+  // two inline-editor controls (a struck all-zero capture, a user-edited value's reset).
+  required: "必需",
+  supplement: "补充",
+  synthesized: "合成",
+  edited: "已编辑",
+  "all zero": "全零",
+  reset: "重置",
+  "(unnamed)": "（未命名）",
+  "64 hex chars": "64 位十六进制字符",
   Installed: "已安装",
   "Install failed": "安装失败",
   "Fabricated value saved — applying…": "已保存伪造值 —— 正在应用…",
@@ -435,6 +473,8 @@ const ZH = {
   unknown: "未知",
   "No key was attestable (common on certain models after unlocking the bootloader), so nothing was captured — every value below is synthesized.":
     "没有任何密钥可通过认证（某些机型解锁 bootloader 后很常见），因此没有采集到任何内容 —— 下面每个值都是合成的。",
+  "StrongBox has no working hardware on this device; keys requested at StrongBox are generated (not patched) at the TEE version.":
+    "本设备的 StrongBox 没有可用的硬件；在 StrongBox 请求的密钥会以 TEE 版本生成（而非修补）。",
 
   // ---- remote key provisioning ---------------------------------------------
   "Remote Key Provision": "远程密钥下发",
@@ -626,6 +666,9 @@ const RULES = [
   // ---- keys ----
   [/^(.*?)  \(Android API (\d+)\)$/, "$1（Android API $2）"],
   [/^(\d+) real device keys? hidden — switch to All to show them\.$/, "已隐藏 $1 个真实设备密钥 —— 切换到“全部”即可显示。"],
+  // The scope control's caption under the Spoofed/All toggle, counted over the visible population.
+  [/^(\d+) real keys? hidden$/, "已隐藏 $1 个真实设备密钥"],
+  [/^(\d+) keys? spoofed$/, "已伪造 $1 个密钥"],
   [/^Delete selected \((\d+)\)$/, "删除所选（$1）"],
   [/^Clear filter (.*)$/, "清除筛选：$1"],
   [/^Filter by (.*)$/, "按 $1 筛选"],
@@ -634,15 +677,25 @@ const RULES = [
 
   // ---- keybox inspection ----
   [/^Inspect (.*)$/, "检查 $1"],
+  [/^DeviceID: (.*)$/, "设备 ID：$1"],
+  // A cert whose parse failed: the cert-block error line, and the bare role chip ("cert 3").
+  [/^cert (\d+): (.*)$/, "证书 $1：$2"],
+  [/^cert (\d+)$/, "证书 $1"],
   [
     /^(Roots in the Google Hardware Attestation key|Roots in a Samsung Knox attestation key)( · .*)?\.$/,
     (m) => `${t(m[1])}${m[2] ? t(m[2]) : ""}。`,
   ],
-  [/^ (· (?:not revoked|revocation list unavailable))\.$/, " · 未吊销。"],
+  // The unknown-root verdict, with or without the trailing revocation note (the note itself is a
+  // dictionary key, so it is looked up rather than duplicated here).
+  [
+    /^Chain does not root in a recognized attestation authority( · revocation list unavailable)?\.$/,
+    (m) => `证书链未能链接到可识别的认证机构${t(m[1] || "")}。`,
+  ],
 
   // ---- system ----
   [/^Flashes (.*) over the current module, then reboot to apply\.$/, "会把 $1 刷写到当前模块之上，重启后生效。"],
   [/^build (.*)$/, "构建 $1"],
+  [/^commit (.*)$/, "提交 $1"],
   [/^(\d+) apps? targeted$/, "已覆盖 $1 个应用"],
 
   // ---- system properties (the hide_props.conf card) ----

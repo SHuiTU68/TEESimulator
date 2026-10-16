@@ -51,12 +51,6 @@ export function closeOverlay() {
   }
 }
 
-// Is any overlay currently open? (Used by callers that want to branch on it; the
-// Back handling itself never needs to ask.)
-export function overlayOpen() {
-  return stack.length > 0;
-}
-
 // The one and only reaction to Back once an entry has been popped: close the
 // innermost overlay. An empty stack means Back already left the base entry and the
 // webview is exiting, so there is nothing to do.
